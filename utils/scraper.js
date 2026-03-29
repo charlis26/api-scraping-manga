@@ -1,26 +1,41 @@
 // Importa o axios para fazer requisições HTTP
 const axios = require("axios");
 
-// Importa o cheerio para manipular HTML
+// Importa o cheerio para manipular o HTML
 const cheerio = require("cheerio");
+
+// Define a URL base do site
+const BASE_URL = "https://mangalivre.blog";
+
+
+// Função auxiliar para converter URL relativa em absoluta
+const toAbsoluteUrl = (url) => {
+  // Retorna null se não existir URL
+  if (!url) return null;
+
+  // Se já for absoluta, retorna como está
+  if (url.startsWith("http")) return url;
+
+  // Monta a URL absoluta
+  return `${BASE_URL}${url}`;
+};
 
 
 // ===============================
 // FUNÇÃO: BUSCAR MANGÁS DA HOME
 // ===============================
 const scrapeHome = async () => {
-
   try {
-
-    // Faz requisição para a home do site
-    const response =
-      await axios.get(
-        "https://mangalivre.blog/",
-        {
-          // Define timeout para evitar travamento
-          timeout: 10000
-        }
-      );
+    // Faz a requisição para a home
+    const response = await axios.get(BASE_URL, {
+      // Timeout para evitar travamento
+      timeout: 10000,
+      // User-Agent para reduzir bloqueios simples
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      },
+    });
 
     // Carrega o HTML no cheerio
     const $ = cheerio.load(response.data);
@@ -32,346 +47,234 @@ const scrapeHome = async () => {
     const seenLinks = new Set();
 
 
-    // Percorre cada card de mangá
-    $(".page-item-detail").each((index, element) => {
+    // Percorre todos os links da página
+    $("a").each((index, element) => {
+      // Pega o texto do link
+      const title = $(element).text().trim();
 
-      // Pega o título do mangá
-      const title =
-        $(element)
-          .find(".post-title a")
-          .text()
-          .trim();
+      // Pega o href do link
+      let link = $(element).attr("href");
 
-      // Pega o link do mangá
-      let link =
-        $(element)
-          .find(".post-title a")
-          .attr("href");
+      // Ignora se não tiver link
+      if (!link) return;
 
-      // Pega a imagem da capa
-      let cover =
-        $(element)
-          .find("img")
-          .attr("src");
+      // Só aceita links de mangá
+      if (!link.includes("/manga/")) return;
 
+      // Ignora links genéricos
+      if (link === "/manga/" || link === `${BASE_URL}/manga/`) return;
 
-      // Ignora se faltar dados
-      if (!title || !link) return;
+      // Ignora links com parâmetros
+      if (link.includes("?")) return;
 
+      // Converte link relativo em absoluto
+      link = toAbsoluteUrl(link);
 
-      // Converte link relativo para absoluto
-      if (!link.startsWith("http")) {
+      // Ignora título vazio
+      if (!title) return;
 
-        link =
-          "https://mangalivre.blog" +
-          link;
+      // Ignora títulos muito curtos
+      if (title.length < 2) return;
 
-      }
+      // Ignora textos que sejam só números ou pontuação
+      const isOnlyNumber = /^[\d.,\s]+$/.test(title);
+      if (isOnlyNumber) return;
 
+      // Ignora alguns títulos genéricos
+      const invalidTitles = [
+        "Todos os Mangás",
+        "Em Lançamento",
+        "Início",
+        "Modo Escuro",
+        "Fazer Login",
+      ];
 
-      // Converte imagem relativa para absoluta
-      if (cover && !cover.startsWith("http")) {
-
-        cover =
-          "https://mangalivre.blog" +
-          cover;
-
-      }
-
+      if (invalidTitles.includes(title)) return;
 
       // Evita duplicados
       if (seenLinks.has(link)) return;
-
-      // Marca como já usado
       seenLinks.add(link);
 
+      // Tenta encontrar a imagem mais próxima do link
+      let cover =
+        $(element).find("img").attr("src") ||
+        $(element).closest("article").find("img").first().attr("src") ||
+        $(element).closest("div").find("img").first().attr("src") ||
+        $(element).parent().find("img").first().attr("src") ||
+        null;
 
-      // Adiciona o mangá na lista
+      // Converte capa para absoluta
+      cover = toAbsoluteUrl(cover);
+
+      // Adiciona o mangá
       mangas.push({
-
-        // ID sequencial
         id: mangas.length + 1,
-
-        // Título do mangá
         title,
-
-        // Link do mangá
         link,
-
-        // Capa do mangá
-        cover
-
+        cover,
       });
-
     });
-
 
     // Retorna a lista final
     return mangas;
+  } catch (error) {
+    // Mostra erro no terminal
+    console.error("Erro ao buscar mangás:", error.message);
 
-  }
-
-  catch (error) {
-
-    // Loga erro no terminal
-    console.error(
-      "Erro ao buscar mangás:",
-      error.message
-    );
-
-    // Retorna lista vazia para não quebrar a API
+    // Retorna lista vazia em caso de erro
     return [];
-
   }
-
 };
-
 
 
 // ===============================
 // FUNÇÃO: BUSCAR CAPÍTULOS
 // ===============================
 const scrapeChapters = async (mangaUrl) => {
-
   try {
+    // Faz a requisição para a página do mangá
+    const response = await axios.get(mangaUrl, {
+      // Timeout
+      timeout: 10000,
+      // Headers básicos
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      },
+    });
 
-    // Faz requisição para página do mangá
-    const response =
-      await axios.get(
-        mangaUrl,
-        {
-          timeout: 10000
-        }
-      );
-
-    // Carrega HTML
-    const $ =
-      cheerio.load(
-        response.data
-      );
+    // Carrega o HTML
+    const $ = cheerio.load(response.data);
 
     // Lista de capítulos
     const chapters = [];
 
     // Evita duplicados
-    const seenLinks =
-      new Set();
+    const seenLinks = new Set();
 
 
     // Percorre todos os links
     $("a").each((index, element) => {
+      // Texto do link
+      const title = $(element).text().trim();
 
-      // Pega texto
-      const title =
-        $(element)
-          .text()
-          .trim();
+      // Href do link
+      let link = $(element).attr("href");
 
-      // Pega link
-      let link =
-        $(element)
-          .attr("href");
-
-
-      // Ignora se não tiver link
+      // Ignora links vazios
       if (!link) return;
 
+      // Converte para URL absoluta
+      link = toAbsoluteUrl(link);
 
-      // Converte link relativo
-      if (!link.startsWith("http")) {
-
-        link =
-          "https://mangalivre.blog" +
-          link;
-
-      }
-
-
-      // Detecta se parece capítulo
+      // Verifica se parece capítulo
       const looksLikeChapter =
+        title.toLowerCase().includes("capítulo") ||
+        link.toLowerCase().includes("/capitulo/");
 
-        title
-          .toLowerCase()
-          .includes("capítulo")
+      // Ignora botão de iniciar leitura
+      if (title.toLowerCase().includes("iniciar")) return;
 
-        ||
-
-        link
-          .toLowerCase()
-          .includes("/capitulo/");
-
-
-      // Ignora botão iniciar leitura
-      if (
-        title
-          .toLowerCase()
-          .includes("iniciar")
-      ) return;
-
-
-      // Ignora se não for capítulo
+      // Ignora o que não for capítulo
       if (!looksLikeChapter) return;
-
 
       // Evita duplicados
       if (seenLinks.has(link)) return;
-
       seenLinks.add(link);
-
 
       // Adiciona capítulo
       chapters.push({
-
-        // ID sequencial
-        id:
-          chapters.length + 1,
-
-        // Título
+        id: chapters.length + 1,
         title,
-
-        // Link
-        link
-
+        link,
       });
-
     });
-
 
     // Retorna capítulos
     return chapters;
+  } catch (error) {
+    // Mostra erro no terminal
+    console.error("Erro ao buscar capítulos:", error.message);
 
-  }
-
-  catch (error) {
-
-    console.error(
-      "Erro ao buscar capítulos:",
-      error.message
-    );
-
+    // Retorna lista vazia
     return [];
-
   }
-
 };
-
 
 
 // ===============================
 // FUNÇÃO: BUSCAR PÁGINAS
 // ===============================
 const scrapePages = async (chapterUrl) => {
-
   try {
+    // Faz a requisição para a página do capítulo
+    const response = await axios.get(chapterUrl, {
+      // Timeout
+      timeout: 10000,
+      // Headers básicos
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+      },
+    });
 
-    // Faz requisição
-    const response =
-      await axios.get(
-        chapterUrl,
-        {
-          timeout: 10000
-        }
-      );
+    // Carrega o HTML
+    const $ = cheerio.load(response.data);
 
-    // Carrega HTML
-    const $ =
-      cheerio.load(
-        response.data
-      );
-
-    // Lista final
+    // Lista final das páginas
     const pages = [];
 
     // Evita imagens repetidas
-    const seenImages =
-      new Set();
+    const seenImages = new Set();
 
-    // Contador
+    // Contador de páginas
     let pageNumber = 1;
 
 
-    // Percorre imagens
+    // Percorre as imagens
     $("img").each((index, element) => {
-
-      // Pega src
-      let src =
-        $(element)
-          .attr("src");
-
+      // Pega o src
+      let src = $(element).attr("src");
 
       // Ignora vazio
       if (!src) return;
 
+      // Converte para absoluta
+      src = toAbsoluteUrl(src);
 
-      // Converte link relativo
-      if (!src.startsWith("http")) {
-
-        src =
-          "https://mangalivre.blog" +
-          src;
-
-      }
-
-
-      // Só aceita imagens reais
-      const isUploadImage =
-        src.includes(
-          "/wp-content/uploads/"
-        );
-
-
+      // Só aceita imagens reais do upload
+      const isUploadImage = src.includes("/wp-content/uploads/");
       if (!isUploadImage) return;
-
 
       // Evita duplicados
       if (seenImages.has(src)) return;
-
       seenImages.add(src);
-
 
       // Adiciona página
       pages.push({
-
-        // Número da página
-        page:
-          pageNumber,
-
-        // URL da imagem
-        image:
-          src
-
+        page: pageNumber,
+        image: src,
       });
 
-
+      // Incrementa contador
       pageNumber++;
-
     });
 
-
+    // Retorna páginas
     return pages;
+  } catch (error) {
+    // Mostra erro no terminal
+    console.error("Erro ao buscar páginas:", error.message);
 
-  }
-
-  catch (error) {
-
-    console.error(
-      "Erro ao buscar páginas:",
-      error.message
-    );
-
+    // Retorna lista vazia
     return [];
-
   }
-
 };
 
 
-
-// Exporta funções
+// Exporta as funções
 module.exports = {
-
   scrapeHome,
   scrapeChapters,
-  scrapePages
-
+  scrapePages,
 };
