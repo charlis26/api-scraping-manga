@@ -401,6 +401,114 @@ const normalizeChapters = (chapters = []) => {
 };
 
 
+// Função auxiliar para pegar o melhor src possível da imagem
+const getBestImageSrc = ($, element) => {
+
+  // Tenta src padrão
+  let src = $(element).attr("src");
+
+  // Tenta lazy load
+  if (!src) {
+    src = $(element).attr("data-src");
+  }
+
+  // Tenta data-lazy-src
+  if (!src) {
+    src = $(element).attr("data-lazy-src");
+  }
+
+  // Tenta data-original
+  if (!src) {
+    src = $(element).attr("data-original");
+  }
+
+  // Retorna absoluta
+  return toAbsoluteUrl(src);
+
+};
+
+
+// Função auxiliar para validar se a imagem parece real de leitura
+const isValidReaderImage = (src = "") => {
+
+  // Se não existir src, rejeita
+  if (!src) return false;
+
+  // Converte para minúsculo
+  const lowerSrc = src.toLowerCase();
+
+  // Só aceita uploads reais
+  if (!lowerSrc.includes("/wp-content/uploads/")) {
+    return false;
+  }
+
+  // Precisa ser uma extensão de imagem válida
+  const isImageFile =
+    lowerSrc.includes(".jpg") ||
+    lowerSrc.includes(".jpeg") ||
+    lowerSrc.includes(".png") ||
+    lowerSrc.includes(".webp");
+
+  if (!isImageFile) {
+    return false;
+  }
+
+  // Bloqueia imagens comuns de interface e recomendação
+  const blockedTerms = [
+    "logo",
+    "banner",
+    "avatar",
+    "icon",
+    "thumb",
+    "thumbnail",
+    "cover",
+    "capa",
+    "cropped",
+    "ads",
+    "anuncio",
+    "favicon",
+  ];
+
+  // Se contiver algum termo bloqueado, rejeita
+  if (blockedTerms.some((term) => lowerSrc.includes(term))) {
+    return false;
+  }
+
+  // Caso passe nas regras, aceita
+  return true;
+
+};
+
+
+// Função auxiliar para coletar páginas de um container
+const collectReaderImagesFromContainer = ($, container, pages, seenImages) => {
+
+  // Percorre imagens do container
+  $(container).find("img").each((index, element) => {
+
+    // Pega melhor src
+    const src = getBestImageSrc($, element);
+
+    // Ignora o que não parecer imagem real de leitura
+    if (!isValidReaderImage(src)) return;
+
+    // Evita repetidas
+    if (seenImages.has(src)) return;
+
+    // Marca como já vista
+    seenImages.add(src);
+
+    // Adiciona página
+    pages.push({
+      page: pages.length + 1,
+      image: src,
+    });
+
+  });
+
+};
+
+
 // ===============================
 // FUNÇÃO: BUSCAR MANGÁS DA HOME
 // ===============================
@@ -828,61 +936,116 @@ const scrapePages = async (chapterUrl) => {
     // Evita imagens repetidas
     const seenImages = new Set();
 
-    // Percorre todas as imagens
-    $("img").each((index, element) => {
+    // Seletores mais prováveis da área real do leitor
+    const readerSelectors = [
+      ".reading-content",
+      ".chapter-content",
+      ".entry-content",
+      ".main-reading-area",
+      ".chapter-reader",
+      ".chapter-container",
+      ".reading-area",
+      ".page-break",
+      ".text-left",
+    ];
 
-      // Pega o src da imagem
-      let src = $(element).attr("src");
+    // 1) Tenta primeiro nas áreas mais prováveis do leitor
+    for (const selector of readerSelectors) {
 
-      // Ignora se não existir
-      if (!src) return;
+      // Se encontrou esse seletor na página
+      if ($(selector).length > 0) {
 
-      // Converte para URL absoluta
-      src = toAbsoluteUrl(src);
+        // Coleta imagens somente dentro desse seletor
+        collectReaderImagesFromContainer($, selector, pages, seenImages);
 
-      // Só aceita imagens reais do capítulo
-      const isChapterImage =
-        src.includes("/wp-content/uploads/");
+        // Se encontrou uma quantidade razoável, para por aqui
+        if (pages.length >= 2) {
+          break;
+        }
 
-      // Ignora banners, logos etc
-      if (!isChapterImage) return;
+      }
 
-      // Evita duplicadas
-      if (seenImages.has(src)) return;
+    }
 
-      // Marca como vista
-      seenImages.add(src);
+    // 2) Se ainda encontrou pouco ou nada, tenta achar o melhor bloco
+    if (pages.length < 2) {
 
-      // Extrai número da página da URL
-      const match = src.match(/\/(\d+)[^\d]*\.(jpg|png|webp)/i);
+      // Limpa o resultado ruim anterior
+      pages.length = 0;
+      seenImages.clear();
 
-      // Define número
-      const pageNumber =
-        match && match[1]
-          ? Number(match[1])
-          : pages.length + 1;
+      // Guarda melhor container
+      let bestElement = null;
 
-      // Adiciona página
-      pages.push({
-        page: pageNumber,
-        image: src
+      // Guarda melhor quantidade
+      let bestCount = 0;
+
+      // Percorre elementos de bloco comuns
+      $("div, section, article").each((index, element) => {
+
+        // Conta quantas imagens válidas esse bloco tem
+        let validImagesCount = 0;
+
+        $(element).find("img").each((imgIndex, imgElement) => {
+
+          // Pega a melhor URL
+          const src = getBestImageSrc($, imgElement);
+
+          // Se parecer uma imagem real do leitor, conta
+          if (isValidReaderImage(src)) {
+            validImagesCount++;
+          }
+
+        });
+
+        // Se esse bloco é melhor que o anterior, salva
+        if (validImagesCount > bestCount) {
+          bestCount = validImagesCount;
+          bestElement = element;
+        }
+
       });
 
-    });
+      // Se encontrou um bom bloco, coleta dele
+      if (bestElement && bestCount >= 2) {
+        collectReaderImagesFromContainer($, bestElement, pages, seenImages);
+      }
 
-    // Ordena páginas corretamente
-    pages.sort(
-      (a, b) => a.page - b.page
-    );
+    }
 
-    // Reindexa sequência
-    pages.forEach((p, index) => {
+    // 3) Último fallback: usa todas as imagens válidas da página
+    if (pages.length < 2) {
 
-      p.page = index + 1;
+      // Limpa qualquer coleta ruim
+      pages.length = 0;
+      seenImages.clear();
 
-    });
+      // Percorre todas as imagens da página
+      $("img").each((index, element) => {
 
-    // Retorna lista final
+        // Pega a melhor URL
+        const src = getBestImageSrc($, element);
+
+        // Ignora o que não parecer imagem real de leitura
+        if (!isValidReaderImage(src)) return;
+
+        // Evita duplicadas
+        if (seenImages.has(src)) return;
+
+        // Marca como vista
+        seenImages.add(src);
+
+        // Adiciona imagem
+        pages.push({
+          page: pages.length + 1,
+          image: src,
+        });
+
+      });
+
+    }
+
+    // Retorna a lista final
     return pages;
 
   } catch (error) {
