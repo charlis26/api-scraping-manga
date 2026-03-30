@@ -936,106 +936,156 @@ const scrapePages = async (chapterUrl) => {
     // Evita imagens repetidas
     const seenImages = new Set();
 
-    // Seletores mais prováveis da área real do leitor
-    const readerSelectors = [
-      ".reading-content",
-      ".chapter-content",
-      ".entry-content",
-      ".main-reading-area",
-      ".chapter-reader",
-      ".chapter-container",
-      ".reading-area",
-      ".page-break",
-      ".text-left",
-    ];
 
-    // 1) Tenta primeiro nas áreas mais prováveis do leitor
-    for (const selector of readerSelectors) {
+    // Função interna para validar se a imagem está em uma área ignorada
+    const isInsideIgnoredArea = (element) => {
 
-      // Se encontrou esse seletor na página
-      if ($(selector).length > 0) {
+      // Áreas que normalmente não fazem parte da leitura
+      const ignoredSelectors = [
+        "header",
+        "footer",
+        "nav",
+        ".summary_image",
+        ".thumb",
+        ".related",
+        ".sidebar",
+        ".widget",
+        ".profile-manga",
+        ".post-title",
+        ".popular-slider",
+        ".swiper",
+        ".ranking",
+        ".ads",
+        ".advertisement",
+        ".c-breadcrumb",
+      ];
 
-        // Coleta imagens somente dentro desse seletor
-        collectReaderImagesFromContainer($, selector, pages, seenImages);
-
-        // Se encontrou uma quantidade razoável, para por aqui
-        if (pages.length >= 2) {
-          break;
-        }
-
-      }
-
-    }
-
-    // 2) Se ainda encontrou pouco ou nada, tenta achar o melhor bloco
-    if (pages.length < 2) {
-
-      // Limpa o resultado ruim anterior
-      pages.length = 0;
-      seenImages.clear();
-
-      // Guarda melhor container
-      let bestElement = null;
-
-      // Guarda melhor quantidade
-      let bestCount = 0;
-
-      // Percorre elementos de bloco comuns
-      $("div, section, article").each((index, element) => {
-
-        // Conta quantas imagens válidas esse bloco tem
-        let validImagesCount = 0;
-
-        $(element).find("img").each((imgIndex, imgElement) => {
-
-          // Pega a melhor URL
-          const src = getBestImageSrc($, imgElement);
-
-          // Se parecer uma imagem real do leitor, conta
-          if (isValidReaderImage(src)) {
-            validImagesCount++;
-          }
-
-        });
-
-        // Se esse bloco é melhor que o anterior, salva
-        if (validImagesCount > bestCount) {
-          bestCount = validImagesCount;
-          bestElement = element;
-        }
-
+      // Se estiver dentro de alguma dessas áreas, ignora
+      return ignoredSelectors.some((selector) => {
+        return $(element).closest(selector).length > 0;
       });
 
-      // Se encontrou um bom bloco, coleta dele
-      if (bestElement && bestCount >= 2) {
-        collectReaderImagesFromContainer($, bestElement, pages, seenImages);
+    };
+
+
+    // Função interna para pegar a melhor URL possível da imagem
+    const getImageUrl = (element) => {
+
+      // Tenta pegar src normal
+      let src = $(element).attr("src");
+
+      // Tenta lazy load
+      if (!src) {
+        src = $(element).attr("data-src");
       }
 
-    }
+      // Tenta data-lazy-src
+      if (!src) {
+        src = $(element).attr("data-lazy-src");
+      }
 
-    // 3) Último fallback: usa todas as imagens válidas da página
-    if (pages.length < 2) {
+      // Tenta data-original
+      if (!src) {
+        src = $(element).attr("data-original");
+      }
 
-      // Limpa qualquer coleta ruim
-      pages.length = 0;
-      seenImages.clear();
+      // Tenta srcset e pega a primeira URL
+      if (!src) {
+        const srcset = $(element).attr("srcset");
 
-      // Percorre todas as imagens da página
-      $("img").each((index, element) => {
+        if (srcset) {
+          src = srcset.split(",")[0].trim().split(" ")[0].trim();
+        }
+      }
+
+      // Converte para absoluta
+      return toAbsoluteUrl(src);
+
+    };
+
+
+    // Função interna para verificar se a imagem parece página real
+    const isReaderPageImage = (src, element) => {
+
+      // Rejeita vazio
+      if (!src) return false;
+
+      // Rejeita se estiver em área ignorada
+      if (isInsideIgnoredArea(element)) return false;
+
+      // Converte para minúsculo
+      const lowerSrc = src.toLowerCase();
+
+      // Só aceita imagens reais de upload
+      if (!lowerSrc.includes("/wp-content/uploads/")) {
+        return false;
+      }
+
+      // Só aceita extensões de imagem
+      const isValidExtension =
+        lowerSrc.includes(".jpg") ||
+        lowerSrc.includes(".jpeg") ||
+        lowerSrc.includes(".png") ||
+        lowerSrc.includes(".webp");
+
+      if (!isValidExtension) {
+        return false;
+      }
+
+      // Ignora alguns padrões comuns de imagens que não são páginas
+      const blockedTerms = [
+        "logo",
+        "banner",
+        "avatar",
+        "icon",
+        "thumb",
+        "thumbnail",
+        "cover",
+        "capa",
+        "cropped",
+        "ads",
+        "anuncio",
+        "favicon",
+      ];
+
+      if (blockedTerms.some((term) => lowerSrc.includes(term))) {
+        return false;
+      }
+
+      // Verifica atributos de tamanho quando existirem
+      const width = Number($(element).attr("width") || 0);
+      const height = Number($(element).attr("height") || 0);
+
+      // Ignora imagens pequenas demais quando houver tamanho informado
+      if ((width > 0 && width < 400) || (height > 0 && height < 400)) {
+        return false;
+      }
+
+      // Se passou em tudo, aceita
+      return true;
+
+    };
+
+
+    // Função interna para adicionar imagens válidas
+    const collectImages = (selector) => {
+
+      // Percorre as imagens do seletor
+      $(selector).each((index, element) => {
 
         // Pega a melhor URL
-        const src = getBestImageSrc($, element);
+        const src = getImageUrl(element);
 
-        // Ignora o que não parecer imagem real de leitura
-        if (!isValidReaderImage(src)) return;
+        // Ignora o que não parecer página real
+        if (!isReaderPageImage(src, element)) return;
 
-        // Evita duplicadas
+        // Evita repetidas
         if (seenImages.has(src)) return;
 
         // Marca como vista
         seenImages.add(src);
 
-        // Adiciona imagem
+        // Adiciona como página
         pages.push({
           page: pages.length + 1,
           image: src,
@@ -1043,18 +1093,70 @@ const scrapePages = async (chapterUrl) => {
 
       });
 
+    };
+
+
+    // 1) Tenta primeiro os seletores mais confiáveis do leitor
+    const preferredSelectors = [
+      "img.wp-manga-chapter-img",
+      ".reading-content img",
+      ".chapter-content img",
+      ".text-left img",
+      ".entry-content img",
+      "img[class*='chapter']",
+      "img[class*='reading']",
+    ];
+
+    for (const selector of preferredSelectors) {
+
+      // Coleta imagens desse seletor
+      collectImages(selector);
+
+      // Se já encontrou páginas suficientes, para
+      if (pages.length >= 2) {
+        break;
+      }
+
     }
+
+
+    // 2) Se ainda não encontrou, tenta todas as imagens da página
+    if (pages.length < 2) {
+
+      // Limpa resultado anterior
+      pages.length = 0;
+      seenImages.clear();
+
+      // Tenta todas as imagens
+      collectImages("img");
+
+    }
+
+
+    // 3) Ordena pela ordem em que foram encontradas e reindexa
+    pages.forEach((page, index) => {
+
+      // Reindexa páginas
+      page.page = index + 1;
+
+    });
+
+    // Debug útil
+    console.log("DEBUG scrapePages:", {
+      chapterUrl,
+      totalPages: pages.length,
+      pages: pages.slice(0, 5),
+    });
 
     // Retorna a lista final
     return pages;
 
   } catch (error) {
 
-    console.error(
-      "Erro ao buscar páginas:",
-      error.message
-    );
+    // Mostra erro no terminal
+    console.error("Erro ao buscar páginas:", error.message);
 
+    // Retorna vazio
     return [];
 
   }
