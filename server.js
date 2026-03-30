@@ -1,29 +1,49 @@
-// Importa o middleware de compressão das respostas
+const timeoutMiddleware =
+require("./middlewares/timeout.middleware");
+
+// Importa o middleware de compressão
 const compression = require("compression");
 
-// Carrega as variáveis do arquivo .env
+// Carrega variáveis do .env
 require("dotenv").config();
 
-// Importa o middleware de CORS
+// Importa CORS
 const cors = require("cors");
 
-// Importa o middleware global de tratamento de erros
-const errorHandler = require("./middlewares/error.middleware");
-
-// Importa o middleware de rate limit
-const limiter = require("./middlewares/rateLimit.middleware");
-
-// Importa o framework Express
+// Importa Express
 const express = require("express");
 
-// Importa as rotas de mangás
-const mangaRoutes = require("./routes/manga.routes");
-
-// Importa o middleware de segurança HTTP
+// Importa Helmet (segurança)
 const helmet = require("helmet");
 
+// Importa rotas
+const mangaRoutes = require("./routes/manga.routes");
 
-// Cria a aplicação Express
+// Importa rate limit
+let limiter = require("./middlewares/rateLimit.middleware");
+
+// Importa error handler
+let errorHandler = require("./middlewares/error.middleware");
+
+
+// =========================
+// CORREÇÃO AUTOMÁTICA
+// =========================
+
+// Se o middleware veio dentro de objeto
+if (typeof limiter !== "function") {
+  limiter = limiter.default || limiter.limiter || limiter;
+}
+
+if (typeof errorHandler !== "function") {
+  errorHandler =
+    errorHandler.default ||
+    errorHandler.errorHandler ||
+    errorHandler;
+}
+
+
+// Cria app
 const app = express();
 
 
@@ -31,17 +51,18 @@ const app = express();
 // Segurança
 // =========================
 
-// Aplica headers de segurança HTTP
 app.use(helmet());
 
 
 // =========================
-// CORS configurável
+// CORS
 // =========================
 
-app.use(cors({
-  origin: process.env.CORS_ORIGIN || "*"
-}));
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN || "*"
+  })
+);
 
 
 // =========================
@@ -52,11 +73,13 @@ app.use(compression());
 
 
 // =========================
-// Body parser
+// JSON
 // =========================
 
 app.use(express.json());
 
+//timeout para colocar tempó limite nas requisições
+app.use(timeoutMiddleware);
 
 // =========================
 // Rate limit
@@ -66,10 +89,32 @@ app.use(limiter);
 
 
 // =========================
+// Logger simples
+// =========================
+
+app.use((req, res, next) => {
+
+  const start = Date.now();
+
+  res.on("finish", () => {
+
+    const duration = Date.now() - start;
+
+    console.log(
+      `${req.method} ${req.originalUrl} ${res.statusCode} - ${duration}ms`
+    );
+
+  });
+
+  next();
+
+});
+
+
+// =========================
 // Rotas básicas
 // =========================
 
-// Rota principal
 app.get("/", (req, res) => {
 
   res.send("Servidor funcionando 🚀");
@@ -77,23 +122,28 @@ app.get("/", (req, res) => {
 });
 
 
+// =========================
 // Health check
+// =========================
+
 app.get("/health", (req, res) => {
 
   res.json({
-
     status: "ok",
     uptime: process.uptime(),
-    environment: process.env.NODE_ENV || "development",
+    environment:
+      process.env.NODE_ENV || "development",
     port: process.env.PORT,
     timestamp: new Date().toISOString()
-
   });
 
 });
 
 
-// Rotas da API
+// =========================
+// Rotas API
+// =========================
+
 app.use("/api", mangaRoutes);
 
 
@@ -113,10 +163,12 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
 
   console.log(`
+
 Servidor iniciado com sucesso
 
 Environment: ${process.env.NODE_ENV}
 Port: ${PORT}
+
 `);
 
 });

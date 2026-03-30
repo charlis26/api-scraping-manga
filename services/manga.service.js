@@ -1,238 +1,174 @@
-// Importa o scraper responsável por buscar os dados no site
+// Importa o scraper responsável por buscar os dados
 const scraper = require("../utils/scraper");
 
 // Importa o cache com TTL
-const {
-  getCache,
-  setCache,
-  getAllCacheKeys
-} = require("../cache/manga.cache");
+const { getCache, setCache } = require("../cache/manga.cache");
 
-// Importa o erro customizado para recursos não encontrados
+// Importa o erro customizado
 const { NotFoundError } = require("../utils/errors");
 
 
-// Busca a lista de mangás
+// ===============================
+// BUSCAR LISTA DE MANGÁS
+// ===============================
 const fetchMangas = async () => {
 
-  // Define a chave usada para armazenar os mangás no cache
-  const mangasCacheKey = "mangas";
+  // Define chave do cache
+  const cacheKey = "mangas";
 
-  // Tenta buscar os mangás no cache
-  const cachedMangas = getCache(mangasCacheKey);
+  // Tenta buscar no cache
+  let mangas = getCache(cacheKey);
 
-  // Se encontrou no cache, retorna sem fazer scraping novamente
-  if (cachedMangas) {
-    return cachedMangas;
+  // Se não existir no cache
+  if (!mangas) {
+
+    // Loga scraping
+    console.log("SCRAPING: mangas");
+
+    // Busca dados
+    mangas = await scraper.scrapeHome();
+
+    // Salva no cache
+    setCache(cacheKey, mangas);
+
+  } else {
+
+    // Loga cache hit
+    console.log("CACHE HIT: mangas");
+
   }
 
-  // Faz o scraping da home para buscar os mangás
-  const mangas = await scraper.scrapeHome();
-
-  // Salva o resultado no cache
-  setCache(mangasCacheKey, mangas);
-
-  // Retorna a lista de mangás
+  // Retorna lista
   return mangas;
 
 };
 
 
-// Busca os capítulos de um mangá pelo ID
-const fetchChapters = async (id) => {
+// ===============================
+// BUSCAR DETALHES DO MANGÁ
+// ===============================
+const fetchMangaDetails = async (slug) => {
 
-  // Define a chave usada para armazenar os mangás no cache
-  const mangasCacheKey = "mangas";
-
-  // Tenta buscar os mangás no cache
-  let mangas = getCache(mangasCacheKey);
-
-  // Se o cache estiver vazio, faz o scraping automaticamente
-  if (!mangas || mangas.length === 0) {
-
-    // Busca os mangás na home
-    mangas = await scraper.scrapeHome();
-
-    // Salva os mangás no cache
-    setCache(mangasCacheKey, mangas);
-
-  }
-
-  // Procura o mangá pelo ID
-  const manga = mangas.find(
-    item => item.id == id
-  );
-
-  // Se não encontrar o mangá, retorna erro
-  if (!manga) {
+  // Valida slug
+  if (!slug) {
     throw new NotFoundError(
-      "Mangá não encontrado."
+      "Slug do mangá não informado."
     );
   }
 
-  // Define a chave do cache para os capítulos desse mangá
-  const chaptersCacheKey = `chapters_${id}`;
+  // Define chave do cache
+  const cacheKey = `manga_details_${slug}`;
 
-  // Tenta buscar os capítulos no cache
-  const cachedChapters = getCache(chaptersCacheKey);
+  // Tenta buscar no cache
+  let manga = getCache(cacheKey);
 
-  // Se encontrou no cache, retorna sem fazer scraping novamente
-  if (cachedChapters) {
-    return cachedChapters;
-  }
+  // Se não existir no cache
+  if (!manga) {
 
-  // Faz o scraping da página do mangá para buscar os capítulos
-  const chapters = await scraper.scrapeChapters(
-    manga.link
-  );
+    // Loga scraping
+    console.log(`SCRAPING: detalhes ${slug}`);
 
-  // Salva os capítulos no cache
-  setCache(chaptersCacheKey, chapters);
+    // Busca detalhes
+    manga = await scraper.scrapeMangaDetails(slug);
 
-  // Também salva a última lista de capítulos aberta
-  // Isso ajuda a rota /api/capitulo/:id a funcionar
-  setCache("current_chapters", chapters);
-
-  // Retorna a lista de capítulos
-  return chapters;
-
-};
-
-
-// Busca as páginas de um capítulo pelo ID
-const fetchPages = async (chapterId) => {
-
-  // Define a chave do cache para a última lista de capítulos aberta
-  const currentChaptersCacheKey = "current_chapters";
-
-  // Tenta buscar a última lista de capítulos usada
-  let chapters = getCache(currentChaptersCacheKey);
-
-  // Se não encontrar no cache atual, tenta buscar em todos os caches de capítulos
-  if (!chapters || chapters.length === 0) {
-
-    // Busca todas as chaves válidas do cache
-    const cacheKeys = getAllCacheKeys();
-
-    // Filtra apenas as chaves de capítulos
-    const chapterKeys = cacheKeys.filter(
-      key => key.startsWith("chapters_")
-    );
-
-    // Percorre todos os caches de capítulos
-    for (const key of chapterKeys) {
-
-      // Busca a lista de capítulos dessa chave
-      const cachedChapterList = getCache(key);
-
-      // Ignora se não houver lista
-      if (!cachedChapterList || cachedChapterList.length === 0) {
-        continue;
-      }
-
-      // Procura o capítulo pelo ID
-      const foundChapter = cachedChapterList.find(
-        item => item.id == chapterId
+    // Se não encontrou
+    if (!manga) {
+      throw new NotFoundError(
+        "Mangá não encontrado."
       );
-
-      // Se encontrou, usa essa lista como base
-      if (foundChapter) {
-        chapters = cachedChapterList;
-
-        // Atualiza também o current_chapters para facilitar próximas chamadas
-        setCache(currentChaptersCacheKey, chapters);
-
-        break;
-      }
-
     }
 
+  } else {
+
+    // Loga cache hit
+    console.log(`CACHE HIT: detalhes ${slug}`);
+
   }
 
-  // Se ainda não existir lista de capítulos no cache, retorna erro
-  if (!chapters || chapters.length === 0) {
+  // Garante que latestChapters exista mesmo em cache antigo
+  if (
+    !manga.latestChapters &&
+    Array.isArray(manga.chapters)
+  ) {
+
+    // Cria os 2 últimos capítulos
+    manga.latestChapters = manga.chapters.slice(-2).reverse();
+
+  }
+
+  // Atualiza o cache já no formato novo
+  setCache(cacheKey, manga);
+
+  // Retorna todos os dados organizados
+  return {
+    title: manga.title,
+    slug: manga.slug,
+    link: manga.link,
+    cover: manga.cover,
+    synopsis: manga.synopsis,
+    status: manga.status,
+    author: manga.author,
+    artist: manga.artist,
+    year: manga.year,
+    genres: manga.genres || [],
+    chapters: manga.chapters || [],
+    latestChapters: manga.latestChapters || []
+  };
+
+};
+
+
+// ===============================
+// BUSCAR PÁGINAS POR SLUG
+// ===============================
+const fetchPagesBySlug = async (slug) => {
+
+  // Valida slug
+  if (!slug) {
     throw new NotFoundError(
-      "Capítulos não encontrados. Acesse /api/mangas/:id primeiro."
+      "Slug do capítulo não informado."
     );
   }
 
-  // Procura o capítulo pelo ID
-  const chapter = chapters.find(
-    item => item.id == chapterId
-  );
+  // Define chave do cache
+  const cacheKey = `pages_slug_${slug}`;
 
-  // Se não encontrar o capítulo, retorna erro
-  if (!chapter) {
-    throw new NotFoundError(
-      "Capítulo não encontrado."
-    );
+  // Tenta buscar no cache
+  let pages = getCache(cacheKey);
+
+  // Se não existir no cache
+  if (!pages) {
+
+    // Loga scraping
+    console.log(`SCRAPING: ${slug}`);
+
+    // Monta URL do capítulo
+    const chapterUrl = `https://mangalivre.blog/capitulo/${slug}/`;
+
+    // Busca páginas
+    pages = await scraper.scrapePages(chapterUrl);
+
+    // Salva no cache
+    setCache(cacheKey, pages);
+
+  } else {
+
+    // Loga cache hit
+    console.log(`CACHE HIT: ${slug}`);
+
   }
 
-  // Define a chave do cache para as páginas desse capítulo
-  const pagesCacheKey = `pages_${chapterId}`;
-
-  // Tenta buscar as páginas no cache
-  const cachedPages = getCache(pagesCacheKey);
-
-  // Se encontrou no cache, retorna sem fazer scraping novamente
-  if (cachedPages) {
-    return cachedPages;
-  }
-
-  // Faz o scraping da página do capítulo para buscar as imagens
-  const pages = await scraper.scrapePages(
-    chapter.link
-  );
-
-  // Salva as páginas no cache
-  setCache(pagesCacheKey, pages);
-
-  // Retorna a lista de páginas
+  // Retorna páginas
   return pages;
 
 };
 
 
-// Busca as páginas de um capítulo pelo link diretamente
-// Essa função é um refinamento profissional para reduzir dependência do cache atual
-const fetchPagesByLink = async (chapterLink) => {
-
-  // Verifica se o link foi informado
-  if (!chapterLink) {
-    throw new NotFoundError(
-      "Link do capítulo não informado."
-    );
-  }
-
-  // Define uma chave de cache baseada no link
-  const pagesCacheKey = `pages_link_${chapterLink}`;
-
-  // Tenta buscar as páginas no cache
-  const cachedPages = getCache(pagesCacheKey);
-
-  // Se encontrou no cache, retorna sem fazer scraping novamente
-  if (cachedPages) {
-    return cachedPages;
-  }
-
-  // Faz o scraping direto usando o link do capítulo
-  const pages = await scraper.scrapePages(
-    chapterLink
-  );
-
-  // Salva no cache
-  setCache(pagesCacheKey, pages);
-
-  // Retorna as páginas
-  return pages;
-
-};
-
-
-// Exporta as funções para uso no controller
+// ===============================
+// EXPORTAÇÃO
+// ===============================
 module.exports = {
   fetchMangas,
-  fetchChapters,
-  fetchPages,
-  fetchPagesByLink
+  fetchMangaDetails,
+  fetchPagesBySlug
 };
