@@ -937,102 +937,32 @@ const scrapePages = async (chapterUrl) => {
     const seenImages = new Set();
 
 
-    // Função interna para validar se a imagem está em uma área ignorada
-    const isInsideIgnoredArea = (element) => {
-
-      // Áreas que normalmente não fazem parte da leitura
-      const ignoredSelectors = [
-        "header",
-        "footer",
-        "nav",
-        ".summary_image",
-        ".thumb",
-        ".related",
-        ".sidebar",
-        ".widget",
-        ".profile-manga",
-        ".post-title",
-        ".popular-slider",
-        ".swiper",
-        ".ranking",
-        ".ads",
-        ".advertisement",
-        ".c-breadcrumb",
-      ];
-
-      // Se estiver dentro de alguma dessas áreas, ignora
-      return ignoredSelectors.some((selector) => {
-        return $(element).closest(selector).length > 0;
-      });
-
-    };
-
-
-    // Função interna para pegar a melhor URL possível da imagem
-    const getImageUrl = (element) => {
-
-      // Tenta pegar src normal
-      let src = $(element).attr("src");
-
-      // Tenta lazy load
-      if (!src) {
-        src = $(element).attr("data-src");
-      }
-
-      // Tenta data-lazy-src
-      if (!src) {
-        src = $(element).attr("data-lazy-src");
-      }
-
-      // Tenta data-original
-      if (!src) {
-        src = $(element).attr("data-original");
-      }
-
-      // Tenta srcset e pega a primeira URL
-      if (!src) {
-        const srcset = $(element).attr("srcset");
-
-        if (srcset) {
-          src = srcset.split(",")[0].trim().split(" ")[0].trim();
-        }
-      }
-
-      // Converte para absoluta
-      return toAbsoluteUrl(src);
-
-    };
-
-
-    // Função interna para verificar se a imagem parece página real
-    const isReaderPageImage = (src, element) => {
+    // Função auxiliar para validar URL de imagem real
+    const isValidPageImageUrl = (url = "") => {
 
       // Rejeita vazio
-      if (!src) return false;
-
-      // Rejeita se estiver em área ignorada
-      if (isInsideIgnoredArea(element)) return false;
+      if (!url) return false;
 
       // Converte para minúsculo
-      const lowerSrc = src.toLowerCase();
+      const lowerUrl = url.toLowerCase();
 
-      // Só aceita imagens reais de upload
-      if (!lowerSrc.includes("/wp-content/uploads/")) {
+      // Só aceita uploads reais
+      if (!lowerUrl.includes("/wp-content/uploads/")) {
         return false;
       }
 
-      // Só aceita extensões de imagem
-      const isValidExtension =
-        lowerSrc.includes(".jpg") ||
-        lowerSrc.includes(".jpeg") ||
-        lowerSrc.includes(".png") ||
-        lowerSrc.includes(".webp");
+      // Só aceita extensões válidas
+      const isImageFile =
+        lowerUrl.includes(".jpg") ||
+        lowerUrl.includes(".jpeg") ||
+        lowerUrl.includes(".png") ||
+        lowerUrl.includes(".webp");
 
-      if (!isValidExtension) {
+      if (!isImageFile) {
         return false;
       }
 
-      // Ignora alguns padrões comuns de imagens que não são páginas
+      // Bloqueia imagens comuns de interface
       const blockedTerms = [
         "logo",
         "banner",
@@ -1048,16 +978,8 @@ const scrapePages = async (chapterUrl) => {
         "favicon",
       ];
 
-      if (blockedTerms.some((term) => lowerSrc.includes(term))) {
-        return false;
-      }
-
-      // Verifica atributos de tamanho quando existirem
-      const width = Number($(element).attr("width") || 0);
-      const height = Number($(element).attr("height") || 0);
-
-      // Ignora imagens pequenas demais quando houver tamanho informado
-      if ((width > 0 && width < 400) || (height > 0 && height < 400)) {
+      // Rejeita se contiver termo bloqueado
+      if (blockedTerms.some((term) => lowerUrl.includes(term))) {
         return false;
       }
 
@@ -1067,85 +989,162 @@ const scrapePages = async (chapterUrl) => {
     };
 
 
-    // Função interna para adicionar imagens válidas
-    const collectImages = (selector) => {
+    // Função auxiliar para adicionar imagem à lista
+    const pushPageImage = (imageUrl) => {
 
-      // Percorre as imagens do seletor
-      $(selector).each((index, element) => {
+      // Converte para absoluta
+      const absoluteUrl = toAbsoluteUrl(imageUrl);
 
-        // Pega a melhor URL
-        const src = getImageUrl(element);
+      // Valida imagem
+      if (!isValidPageImageUrl(absoluteUrl)) return;
 
-        // Ignora o que não parecer página real
-        if (!isReaderPageImage(src, element)) return;
+      // Evita repetição
+      if (seenImages.has(absoluteUrl)) return;
 
-        // Evita repetidas
-        if (seenImages.has(src)) return;
+      // Marca como vista
+      seenImages.add(absoluteUrl);
 
-        // Marca como vista
-        seenImages.add(src);
-
-        // Adiciona como página
-        pages.push({
-          page: pages.length + 1,
-          image: src,
-        });
-
+      // Adiciona página
+      pages.push({
+        page: pages.length + 1,
+        image: absoluteUrl,
       });
 
     };
 
 
-    // 1) Tenta primeiro os seletores mais confiáveis do leitor
-    const preferredSelectors = [
-      "img.wp-manga-chapter-img",
-      ".reading-content img",
-      ".chapter-content img",
-      ".text-left img",
-      ".entry-content img",
-      "img[class*='chapter']",
-      "img[class*='reading']",
-    ];
+    // ==========================================
+    // 1) TENTA PEGAR PELOS LINKS "PÁGINA X"
+    // ==========================================
+    $("a").each((index, element) => {
 
-    for (const selector of preferredSelectors) {
+      // Pega texto visível do link
+      const linkText = cleanText($(element).text());
 
-      // Coleta imagens desse seletor
-      collectImages(selector);
+      // Pega href
+      const href = $(element).attr("href");
 
-      // Se já encontrou páginas suficientes, para
-      if (pages.length >= 2) {
-        break;
+      // Só aceita links que pareçam páginas do leitor
+      const looksLikePageLink =
+        /^página\s*\d+$/i.test(linkText) ||
+        /^pagina\s*\d+$/i.test(linkText);
+
+      // Ignora o que não for link de página
+      if (!looksLikePageLink) return;
+
+      // Adiciona imagem se válida
+      pushPageImage(href);
+
+    });
+
+
+    // ==========================================
+    // 2) FALLBACK: TENTA POR IMG DENTRO DA ÁREA
+    // ==========================================
+    if (pages.length < 2) {
+
+      // Limpa o resultado anterior se veio incompleto
+      pages.length = 0;
+      seenImages.clear();
+
+      // Seletores mais prováveis da área do leitor
+      const preferredSelectors = [
+        "img.wp-manga-chapter-img",
+        ".reading-content img",
+        ".chapter-content img",
+        ".text-left img",
+        ".entry-content img",
+        "img[class*='chapter']",
+        "img[class*='reading']",
+      ];
+
+      // Percorre seletores
+      for (const selector of preferredSelectors) {
+
+        // Percorre imagens do seletor
+        $(selector).each((index, element) => {
+
+          // Tenta src
+          let src = $(element).attr("src");
+
+          // Tenta data-src
+          if (!src) {
+            src = $(element).attr("data-src");
+          }
+
+          // Tenta data-lazy-src
+          if (!src) {
+            src = $(element).attr("data-lazy-src");
+          }
+
+          // Tenta data-original
+          if (!src) {
+            src = $(element).attr("data-original");
+          }
+
+          // Adiciona imagem
+          pushPageImage(src);
+
+        });
+
+        // Se encontrou páginas suficientes, para
+        if (pages.length >= 2) {
+          break;
+        }
+
       }
 
     }
 
 
-    // 2) Se ainda não encontrou, tenta todas as imagens da página
+    // ==========================================
+    // 3) FALLBACK FINAL: TODAS AS IMG
+    // ==========================================
     if (pages.length < 2) {
 
-      // Limpa resultado anterior
+      // Limpa novamente
       pages.length = 0;
       seenImages.clear();
 
-      // Tenta todas as imagens
-      collectImages("img");
+      // Percorre todas as imagens da página
+      $("img").each((index, element) => {
+
+        // Tenta src
+        let src = $(element).attr("src");
+
+        // Tenta data-src
+        if (!src) {
+          src = $(element).attr("data-src");
+        }
+
+        // Tenta data-lazy-src
+        if (!src) {
+          src = $(element).attr("data-lazy-src");
+        }
+
+        // Tenta data-original
+        if (!src) {
+          src = $(element).attr("data-original");
+        }
+
+        // Adiciona imagem
+        pushPageImage(src);
+
+      });
 
     }
 
 
-    // 3) Ordena pela ordem em que foram encontradas e reindexa
+    // Reindexa por segurança
     pages.forEach((page, index) => {
-
-      // Reindexa páginas
       page.page = index + 1;
-
     });
 
     // Debug útil
     console.log("DEBUG scrapePages:", {
       chapterUrl,
       totalPages: pages.length,
-      pages: pages.slice(0, 5),
+      sample: pages.slice(0, 3),
     });
 
     // Retorna a lista final
@@ -1160,9 +1159,7 @@ const scrapePages = async (chapterUrl) => {
     return [];
 
   }
-
 };
-
 
 // Exporta as funções
 module.exports = {
