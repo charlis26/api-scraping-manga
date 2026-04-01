@@ -619,35 +619,27 @@ const scrapeHome = async () => {
   const html = await fetchHtml(url, {
     preferPlaywright: true
   });
-const scrapeHome = async () => {
-  const url = BASE_URL;
 
-  const html = await fetchHtml(url, {
-    preferPlaywright: true
-  });
-
+  // Logs de debug para o Render
   console.log("\n[DEBUG HOME] URL:", url);
   console.log("[DEBUG HOME] HTML length:", html ? html.length : 0);
 
   const debug$ = cheerio.load(html || "");
+
   console.log("[DEBUG HOME] title:", cleanText(debug$("title").text()));
   console.log("[DEBUG HOME] h1:", cleanText(debug$("h1").first().text()));
-  console.log("[DEBUG HOME] anime links:", debug$("a[href*='/anime/'], a[href*='/animes/']").length);
+  console.log(
+    "[DEBUG HOME] anime links:",
+    debug$("a[href*='/anime/'], a[href*='/animes/']").length
+  );
 
   console.log(
     "[DEBUG HOME] first 1000 chars:",
     String(html || "").slice(0, 1000)
   );
 
-  const $ = cheerio.load(html);
-
-  const animes = [];
-  const seenLinks = new Set();
-
-  // resto da função continua normalmente...
-};
   // Carrega no cheerio
-  const $ = cheerio.load(html);
+  const $ = cheerio.load(html || "");
 
   // Guarda resultados
   const animes = [];
@@ -674,14 +666,13 @@ const scrapeHome = async () => {
     }
 
     // Tenta obter título
-    const title =
-      normalizeAnimeTitle(
-        cleanText($(element).attr("title")) ||
-        cleanText($(element).find("img").attr("alt")) ||
-        cleanText($(element).text()) ||
-        cleanText($(element).closest("article").text()) ||
-        cleanText($(element).closest("div").text())
-      );
+    const title = normalizeAnimeTitle(
+      cleanText($(element).attr("title")) ||
+      cleanText($(element).find("img").attr("alt")) ||
+      cleanText($(element).text()) ||
+      cleanText($(element).closest("article").text()) ||
+      cleanText($(element).closest("div").text())
+    );
 
     // Ignora título ruim
     if (!title || title.length < 2) {
@@ -709,6 +700,9 @@ const scrapeHome = async () => {
     ...item,
     id: index + 1
   }));
+
+  // Debug final
+  console.log("[DEBUG HOME] extracted animes:", uniqueItems.length);
 
   // Retorna lista final
   return uniqueItems;
