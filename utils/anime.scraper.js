@@ -12,72 +12,164 @@ const { BASE_URL } = require("../config/anime.config");
 
 
 // ===============================
-// FUNÇÕES AUXILIARES
+// CONFIGURAÇÕES DE RESILIÊNCIA
+// ===============================
+
+// Define o total máximo de tentativas por estratégia
+const MAX_RETRIES = Number(process.env.SCRAPER_MAX_RETRIES || 3);
+
+// Define o timeout padrão das requisições HTTP
+const DEFAULT_HTTP_TIMEOUT = Number(process.env.SCRAPER_HTTP_TIMEOUT || 15000);
+
+// Define o timeout padrão do navegador
+const DEFAULT_BROWSER_TIMEOUT = Number(process.env.SCRAPER_BROWSER_TIMEOUT || 25000);
+
+// Define o delay mínimo entre tentativas
+const MIN_DELAY_MS = Number(process.env.SCRAPER_MIN_DELAY_MS || 900);
+
+// Define o delay máximo entre tentativas
+const MAX_DELAY_MS = Number(process.env.SCRAPER_MAX_DELAY_MS || 2200);
+
+// Define o tempo de espera extra após abrir a página no Playwright
+const PLAYWRIGHT_WAIT_AFTER_LOAD_MS = Number(process.env.SCRAPER_PLAYWRIGHT_WAIT_MS || 2500);
+
+// Define se o scraper pode usar proxy
+const PROXY_URL = String(process.env.PROXY_URL || "").trim();
+
+// Guarda uma instância reutilizável do browser
+let sharedBrowser = null;
+
+
+// ===============================
+// USER AGENTS ROTATIVOS
+// ===============================
+
+// Lista de user agents realistas para reduzir padrão repetitivo
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:137.0) Gecko/20100101 Firefox/137.0"
+];
+
+
+// ===============================
+// FUNÇÕES AUXILIARES GERAIS
 // ===============================
 
 // Remove espaços duplicados e limpa o texto
 const cleanText = (text = "") => {
-  // Converte para string, remove espaços extras e limpa as pontas
   return String(text).replace(/\s+/g, " ").trim();
+};
+
+
+// Faz espera assíncrona
+const sleep = async (ms = 0) => {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+};
+
+
+// Gera número aleatório inteiro entre mínimo e máximo
+const randomBetween = (min, max) => {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+};
+
+
+// Retorna um item aleatório de uma lista
+const pickRandom = (items = []) => {
+  if (!Array.isArray(items) || items.length === 0) {
+    return "";
+  }
+
+  return items[Math.floor(Math.random() * items.length)];
+};
+
+
+// Gera atraso com jitter para reduzir padrão robótico
+const getRetryDelay = (attempt = 1) => {
+  const exponentialBase = Math.min(attempt, 6);
+  const exponentialDelay = Math.pow(2, exponentialBase) * 500;
+  const jitter = randomBetween(MIN_DELAY_MS, MAX_DELAY_MS);
+
+  return exponentialDelay + jitter;
+};
+
+
+// Gera viewport aleatória para reduzir padrão fixo
+const createRandomViewport = () => {
+  return {
+    width: randomBetween(1280, 1600),
+    height: randomBetween(720, 980)
+  };
 };
 
 
 // Converte URL relativa em absoluta
 const toAbsoluteUrl = (url = "") => {
-  // Se não existir URL, retorna string vazia
   if (!url) {
     return "";
   }
 
-  // Se já for absoluta, retorna direto
   if (/^https?:\/\//i.test(url)) {
     return url;
   }
 
-  // Se começar com dupla barra, adiciona protocolo
   if (url.startsWith("//")) {
     return `https:${url}`;
   }
 
-  // Se começar com barra, concatena com a base
   if (url.startsWith("/")) {
     return `${BASE_URL}${url}`;
   }
 
-  // Caso contrário, adiciona manualmente
   return `${BASE_URL}/${url}`;
+};
+
+
+// Limpa slug sujo do site
+const normalizeAnimeSlug = (slug = "") => {
+  let normalizedSlug = String(slug)
+    .toLowerCase()
+    .trim()
+    .replace(/\/+$/, "");
+
+  normalizedSlug = normalizedSlug
+    .replace(/-todos-os-episodios.*$/i, "")
+    .replace(/-todos-episodios.*$/i, "")
+    .replace(/-episodios-online.*$/i, "")
+    .replace(/-episodio-online.*$/i, "")
+    .replace(/-dublado.*$/i, "")
+    .replace(/-legendado.*$/i, "")
+    .replace(/-online.*$/i, "")
+    .trim();
+
+  return normalizedSlug;
 };
 
 
 // Extrai slug do anime a partir da URL
 const getAnimeSlugFromUrl = (url = "") => {
-  // Normaliza removendo barras finais
   const normalizedUrl = String(url).replace(/\/+$/, "");
 
-  // Tenta padrões comuns
   const match =
     normalizedUrl.match(/\/anime\/([^/?#]+)/i) ||
     normalizedUrl.match(/\/animes\/([^/?#]+)/i);
 
-  // Se encontrou, retorna o slug
   if (match && match[1]) {
-    return cleanText(match[1]);
+    return normalizeAnimeSlug(match[1]);
   }
 
-  // Divide em partes como fallback
   const parts = normalizedUrl.split("/").filter(Boolean);
 
-  // Retorna a última parte
-  return parts[parts.length - 1] || "";
+  return normalizeAnimeSlug(parts[parts.length - 1] || "");
 };
 
 
 // Extrai número do episódio a partir da URL
 const getEpisodeNumberFromUrl = (url = "") => {
-  // Normaliza removendo barras finais
   const normalizedUrl = String(url).replace(/\/+$/, "");
 
-  // Procura padrões mais comuns
   const match =
     normalizedUrl.match(/episodio-(\d+)(?:[/?#]|$)/i) ||
     normalizedUrl.match(/epis[oó]dio[-\/]?(\d+)(?:[/?#]|$)/i) ||
@@ -85,53 +177,42 @@ const getEpisodeNumberFromUrl = (url = "") => {
     normalizedUrl.match(/ep[-\/]?(\d+)(?:[/?#]|$)/i) ||
     normalizedUrl.match(/\/(\d+)(?:[/?#]|$)/i);
 
-  // Se encontrou, retorna número
   if (match && match[1]) {
     return Number(match[1]);
   }
 
-  // Se não encontrou, retorna null
   return null;
 };
 
 
 // Extrai número do episódio a partir do texto
 const getEpisodeNumberFromText = (text = "") => {
-  // Limpa o texto
   const normalizedText = cleanText(text);
 
-  // Procura padrões comuns
   const match =
     normalizedText.match(/epis[oó]dio\s*(\d+)/i) ||
     normalizedText.match(/\bep\.?\s*(\d+)/i) ||
     normalizedText.match(/\bepis[oó]dio[-\s]*(\d+)/i);
 
-  // Se encontrou, retorna número
   if (match && match[1]) {
     return Number(match[1]);
   }
 
-  // Caso contrário, retorna null
   return null;
 };
 
 
 // Busca conteúdo de metatag
 const getMetaContent = ($, selector) => {
-  // Busca o atributo content
   const value = $(selector).attr("content");
-
-  // Retorna limpo
   return cleanText(value || "");
 };
 
 
 // Remove frases comerciais e sujeira do título
 const normalizeAnimeTitle = (title = "") => {
-  // Limpa o texto base
   let normalizedTitle = cleanText(title);
 
-  // Remove frases comuns do site
   normalizedTitle = normalizedTitle
     .replace(/\s+Todos\s+os\s+Epis[oó]dios\s+Online.*$/i, "")
     .replace(/\s+Todos\s+epis[oó]dios.*$/i, "")
@@ -141,25 +222,20 @@ const normalizeAnimeTitle = (title = "") => {
     .replace(/\s+-\s+.*$/i, "")
     .trim();
 
-  // Retorna o título limpo
   return normalizedTitle;
 };
 
 
 // Remove lixo de interface e propaganda da sinopse
-// Remove lixo de interface e propaganda da sinopse
 const cleanSynopsisText = (text = "", animeTitle = "") => {
-  // Guarda texto base
   let cleaned = String(text);
 
-  // Remove scripts e rastros técnicos
   cleaned = cleaned
     .replace(/aclib\.runBanner.*?\);?/gis, "")
     .replace(/window\.[\s\S]*?;/gis, "")
     .replace(/document\.[\s\S]*?;/gis, "")
     .replace(/<script.*?>.*?<\/script>/gis, "");
 
-  // Remove frases comerciais comuns
   cleaned = cleaned
     .replace(/todos\s+os\s+epis[oó]dios\s+online/gi, "")
     .replace(/todos\s+epis[oó]dios.*$/gi, "")
@@ -170,7 +246,6 @@ const cleanSynopsisText = (text = "", animeTitle = "") => {
     .replace(/veja\s+online/gi, "")
     .replace(/assista\s+online/gi, "");
 
-  // Remove repetição promocional do título
   if (animeTitle) {
     const escapedTitle = animeTitle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -180,10 +255,8 @@ const cleanSynopsisText = (text = "", animeTitle = "") => {
     );
   }
 
-  // Normaliza espaços
   cleaned = cleanText(cleaned);
 
-  // Remove pontuação feia no começo
   cleaned = cleaned
     .replace(/^[,.;:\- ]+/, "")
     .replace(/\s+[,.;:]/g, (match) => match.trim())
@@ -191,19 +264,16 @@ const cleanSynopsisText = (text = "", animeTitle = "") => {
     .replace(/\.\s*,/g, ".")
     .trim();
 
-  // Se a sinopse ficou muito curta, zera
   if (cleaned.length < 20) {
     return "";
   }
 
-  // Retorna resultado final
   return cleaned;
 };
 
 
 // Tenta obter imagem por múltiplos atributos
 const getImageFromElement = ($, element) => {
-  // Busca imagem em vários atributos
   const image =
     $(element).find("img").first().attr("src") ||
     $(element).find("img").first().attr("data-src") ||
@@ -213,50 +283,40 @@ const getImageFromElement = ($, element) => {
     $(element).closest("div").find("img").first().attr("src") ||
     "";
 
-  // Retorna absoluta
   return toAbsoluteUrl(image);
 };
 
 
 // Deduplica itens por link
 const uniqueByLink = (items = []) => {
-  // Cria mapa auxiliar
   const map = new Map();
 
-  // Percorre os itens
   items.forEach((item) => {
-    // Ignora item inválido
     if (!item || !item.link) {
       return;
     }
 
-    // Se ainda não existe, salva
     if (!map.has(item.link)) {
       map.set(item.link, item);
     }
   });
 
-  // Retorna os valores únicos
   return Array.from(map.values());
 };
 
 
 // Verifica se um link parece ser página de anime
 const looksLikeAnimeLink = (link = "") => {
-  // Normaliza o link
   const normalizedLink = String(link).replace(/\/+$/, "").toLowerCase();
 
-  // Ignora links vazios
   if (!normalizedLink) {
     return false;
   }
 
-  // Precisa parecer rota de anime
   if (
     normalizedLink.includes("/anime/") ||
     normalizedLink.includes("/animes/")
   ) {
-    // Não pode parecer episódio
     if (
       normalizedLink.includes("/episodio") ||
       normalizedLink.includes("/episode") ||
@@ -268,27 +328,22 @@ const looksLikeAnimeLink = (link = "") => {
     return true;
   }
 
-  // Caso contrário, não parece anime
   return false;
 };
 
 
 // Verifica se um link parece episódio
 const looksLikeEpisodeLink = (link = "", slug = "") => {
-  // Normaliza o link
   const normalizedLink = String(link)
     .replace(/\/+$/, "")
     .toLowerCase();
 
-  // Normaliza o slug
-  const normalizedSlug = String(slug).toLowerCase();
+  const normalizedSlug = normalizeAnimeSlug(String(slug).toLowerCase());
 
-  // Precisa conter slug quando informado
   if (normalizedSlug && !normalizedLink.includes(normalizedSlug)) {
     return false;
   }
 
-  // Precisa parecer episódio
   if (
     normalizedLink.includes("/episodio/") ||
     /episodio-\d+/i.test(normalizedLink) ||
@@ -299,37 +354,30 @@ const looksLikeEpisodeLink = (link = "", slug = "") => {
     return true;
   }
 
-  // Caso contrário, não parece episódio
   return false;
 };
 
 
 // Verifica se um item parece gênero válido
 const isValidGenre = (genre = "") => {
-  // Limpa o texto
   const normalizedGenre = cleanText(genre);
 
-  // Bloqueia vazio
   if (!normalizedGenre) {
     return false;
   }
 
-  // Bloqueia letras soltas
   if (/^[A-ZÀ-ÿ]$/i.test(normalizedGenre)) {
     return false;
   }
 
-  // Bloqueia números puros
   if (/^\d+$/.test(normalizedGenre)) {
     return false;
   }
 
-  // Bloqueia padrões de navegação por letra
   if (/^letra\s+[a-z]$/i.test(normalizedGenre)) {
     return false;
   }
 
-  // Bloqueia termos que não são gênero
   const blockedGenres = [
     "A",
     "B",
@@ -369,53 +417,42 @@ const isValidGenre = (genre = "") => {
     "Assistir"
   ];
 
-  // Bloqueia lista fixa
   if (blockedGenres.includes(normalizedGenre)) {
     return false;
   }
 
-  // Bloqueia textos muito longos
   if (normalizedGenre.length > 30) {
     return false;
   }
 
-  // Se passou, é válido
   return true;
 };
 
 
 // Filtra e normaliza gêneros
 const normalizeGenres = (genres = []) => {
-  // Guarda gêneros válidos
   const uniqueGenres = [];
 
-  // Percorre todos
   genres.forEach((genre) => {
-    // Limpa
     const normalizedGenre = cleanText(genre);
 
-    // Valida
     if (!isValidGenre(normalizedGenre)) {
       return;
     }
 
-    // Evita duplicado
     if (!uniqueGenres.includes(normalizedGenre)) {
       uniqueGenres.push(normalizedGenre);
     }
   });
 
-  // Retorna lista final
   return uniqueGenres;
 };
 
 
 // Tenta limpar o título alternativo
 const normalizeAlternativeTitle = (text = "", mainTitle = "") => {
-  // Limpa texto base
   let normalizedText = cleanText(text);
 
-  // Remove frases comerciais comuns
   normalizedText = normalizedText
     .replace(/todos\s+epis[oó]dios.*$/i, "")
     .replace(/todos\s+os\s+epis[oó]dios.*$/i, "")
@@ -423,7 +460,6 @@ const normalizeAlternativeTitle = (text = "", mainTitle = "") => {
     .replace(/online.*$/i, "")
     .trim();
 
-  // Se ficar igual ao título principal, zera
   if (
     normalizedText &&
     mainTitle &&
@@ -432,22 +468,18 @@ const normalizeAlternativeTitle = (text = "", mainTitle = "") => {
     return "";
   }
 
-  // Se ficar muito curto, ignora
   if (normalizedText.length < 2) {
     return "";
   }
 
-  // Retorna título alternativo limpo
   return normalizedText;
 };
 
 
 // Detecta nome melhor para o player
 const detectPlayerServerName = (url = "", fallback = "player") => {
-  // Normaliza a URL
   const normalizedUrl = String(url).toLowerCase();
 
-  // Detecta provedores conhecidos
   if (normalizedUrl.includes("blogger.com")) {
     return "blogger";
   }
@@ -476,190 +508,413 @@ const detectPlayerServerName = (url = "", fallback = "player") => {
     return "mp4_direct";
   }
 
-  // Retorna fallback
   return fallback;
 };
 
 
-// Monta headers padrão
-const createHeaders = () => {
-  // Retorna headers realistas
+// ===============================
+// DETECÇÃO DE BLOQUEIO / HTML RUIM
+// ===============================
+
+// Detecta se o HTML é vazio ou curto demais
+const isHtmlTooWeak = (html = "") => {
+  const normalizedHtml = String(html || "").trim();
+
+  return !normalizedHtml || normalizedHtml.length < 400;
+};
+
+
+// Detecta sinais comuns de bloqueio do Cloudflare
+const isCloudflareBlocked = (html = "") => {
+  const normalizedHtml = String(html || "").toLowerCase();
+
+  return (
+    normalizedHtml.includes("cloudflare") &&
+    (
+      normalizedHtml.includes("attention required") ||
+      normalizedHtml.includes("verify you are human") ||
+      normalizedHtml.includes("checking your browser") ||
+      normalizedHtml.includes("cf-browser-verification") ||
+      normalizedHtml.includes("cf_chl_") ||
+      normalizedHtml.includes("challenge-platform") ||
+      normalizedHtml.includes("just a moment") ||
+      normalizedHtml.includes("ddos protection by cloudflare")
+    )
+  );
+};
+
+
+// Detecta páginas de erro mascaradas
+const isProtectedOrErrorPage = (html = "") => {
+  const normalizedHtml = String(html || "").toLowerCase();
+
+  return (
+    isHtmlTooWeak(normalizedHtml) ||
+    isCloudflareBlocked(normalizedHtml) ||
+    normalizedHtml.includes("<title>access denied") ||
+    normalizedHtml.includes("<title>403") ||
+    normalizedHtml.includes("<title>429") ||
+    normalizedHtml.includes("too many requests") ||
+    normalizedHtml.includes("temporarily unavailable") ||
+    normalizedHtml.includes("request blocked")
+  );
+};
+
+
+// Valida se o HTML recebido parece uma página real
+const assertValidHtml = (html = "", url = "") => {
+  if (isProtectedOrErrorPage(html)) {
+    throw new Error(`HTML inválido, bloqueado ou incompleto para a URL: ${url}`);
+  }
+
+  return html;
+};
+
+
+// ===============================
+// HEADERS MAIS REALISTAS
+// ===============================
+
+// Monta headers padrão mais próximos de navegador real
+const createHeaders = (url = BASE_URL) => {
+  const userAgent = pickRandom(USER_AGENTS);
+
   return {
-    "User-Agent":
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-    "Accept":
-      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "Accept-Language":
-      "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Referer":
-      BASE_URL
+    "User-Agent": userAgent,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Referer": BASE_URL,
+    "Origin": BASE_URL,
+    "Connection": "keep-alive"
   };
 };
 
 
-// Faz requisição HTTP com axios
-const fetchHtmlWithAxios = async (url) => {
-  // Faz a requisição
-  const response = await axios.get(url, {
-    timeout: 12000,
+// ===============================
+// AXIOS COM RETRY
+// ===============================
+
+// Cria uma instância isolada do axios
+const createAxiosClient = () => {
+  const config = {
+    timeout: DEFAULT_HTTP_TIMEOUT,
     maxRedirects: 5,
-    validateStatus: () => true,
-    headers: createHeaders()
-  });
+    validateStatus: (status) => status >= 200 && status < 400
+  };
 
-  // Retorna HTML se vier string
-  return typeof response.data === "string"
-    ? response.data
-    : "";
-};
-
-
-// Faz requisição renderizada com Playwright
-const fetchHtmlWithPlaywright = async (url) => {
-  let browser = null;
-
-  try {
-    browser = await chromium.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-blink-features=AutomationControlled"
-      ]
-    });
-
-    const context = await browser.newContext({
-      userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-      viewport: {
-        width: 1366,
-        height: 768
-      },
-      locale: "pt-BR",
-      extraHTTPHeaders: {
-        "Accept-Language":
-          "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Referer":
-          BASE_URL
-      }
-    });
-
-    const page = await context.newPage();
-
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "webdriver", {
-        get: () => false
-      });
-
-      Object.defineProperty(navigator, "languages", {
-        get: () => ["pt-BR", "pt", "en-US", "en"]
-      });
-
-      Object.defineProperty(navigator, "plugins", {
-        get: () => [1, 2, 3, 4, 5]
-      });
-    });
-
-    await page.goto(url, {
-      waitUntil: "networkidle",
-      timeout: 60000
-    });
-
-    await page.waitForTimeout(3000);
-
-    const html = await page.content();
-
-    await context.close();
-    await browser.close();
-
-    browser = null;
-
-    return html;
-
-  } catch (error) {
-    if (browser) {
-      await browser.close();
-    }
-
-    throw error;
+  if (PROXY_URL) {
+    config.proxy = false;
   }
+
+  const client = axios.create(config);
+
+  return client;
 };
 
 
-// Escolhe melhor estratégia de fetch
+// Faz requisição HTTP com axios e retry inteligente
+const fetchHtmlWithAxios = async (url) => {
+  const client = createAxiosClient();
+
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+    try {
+      await sleep(randomBetween(300, 900));
+
+      const response = await client.get(url, {
+        headers: createHeaders(url),
+        ...(PROXY_URL
+          ? {
+              httpAgent: undefined,
+              httpsAgent: undefined
+            }
+          : {})
+      });
+
+      const html = typeof response.data === "string" ? response.data : "";
+
+      assertValidHtml(html, url);
+
+      return html;
+    } catch (error) {
+      lastError = error;
+
+      if (attempt < MAX_RETRIES) {
+        await sleep(getRetryDelay(attempt));
+      }
+    }
+  }
+
+  throw lastError || new Error(`Falha ao buscar HTML via Axios: ${url}`);
+};
+
+
+// ===============================
+// PLAYWRIGHT COM SESSÃO PERSISTENTE
+// ===============================
+
+// Retorna instância compartilhada do browser
+const getSharedBrowser = async () => {
+  if (sharedBrowser) {
+    return sharedBrowser;
+  }
+
+  const launchOptions = {
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled"
+    ]
+  };
+
+  if (PROXY_URL) {
+    launchOptions.proxy = {
+      server: PROXY_URL
+    };
+  }
+
+  sharedBrowser = await chromium.launch(launchOptions);
+
+  return sharedBrowser;
+};
+
+
+// Aplica pequenos ajustes anti-automação no contexto
+const prepareContext = async (context) => {
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => undefined
+    });
+
+    Object.defineProperty(navigator, "languages", {
+      get: () => ["pt-BR", "pt", "en-US", "en"]
+    });
+
+    Object.defineProperty(navigator, "platform", {
+      get: () => "Win32"
+    });
+
+    Object.defineProperty(navigator, "plugins", {
+      get: () => [1, 2, 3, 4, 5]
+    });
+
+    window.chrome = {
+      runtime: {}
+    };
+  });
+};
+
+
+// Faz requisição renderizada com Playwright e retry inteligente
+const fetchHtmlWithPlaywright = async (url) => {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+    let context = null;
+    let page = null;
+
+    try {
+      const browser = await getSharedBrowser();
+
+      context = await browser.newContext({
+        userAgent: pickRandom(USER_AGENTS),
+        viewport: createRandomViewport(),
+        locale: "pt-BR",
+        javaScriptEnabled: true,
+        extraHTTPHeaders: {
+          "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+          "Referer": BASE_URL,
+          "Origin": BASE_URL,
+          "Cache-Control": "no-cache",
+          "Pragma": "no-cache"
+        }
+      });
+
+      await prepareContext(context);
+
+      page = await context.newPage();
+
+      await page.route("**/*", async (route) => {
+        const request = route.request();
+        const resourceType = request.resourceType();
+        const resourceUrl = request.url().toLowerCase();
+
+        if (
+          resourceType === "font" ||
+          resourceType === "media" ||
+          resourceType === "websocket" ||
+          resourceUrl.includes("doubleclick") ||
+          resourceUrl.includes("googlesyndication") ||
+          resourceUrl.includes("google-analytics") ||
+          resourceUrl.includes("facebook.com/tr")
+        ) {
+          await route.abort();
+          return;
+        }
+
+        await route.continue();
+      });
+
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: DEFAULT_BROWSER_TIMEOUT
+      });
+
+      await page.waitForLoadState("networkidle", {
+        timeout: 8000
+      }).catch(() => null);
+
+      await page.waitForTimeout(PLAYWRIGHT_WAIT_AFTER_LOAD_MS + randomBetween(400, 1300));
+
+      const html = await page.content();
+
+      assertValidHtml(html, url);
+
+      await context.close();
+
+      return html;
+    } catch (error) {
+      lastError = error;
+
+      if (context) {
+        await context.close().catch(() => null);
+      }
+
+      if (attempt < MAX_RETRIES) {
+        await sleep(getRetryDelay(attempt));
+      }
+    }
+  }
+
+  throw lastError || new Error(`Falha ao buscar HTML via Playwright: ${url}`);
+};
+
+
+// Fecha o browser compartilhado em encerramento do processo
+const closeSharedBrowser = async () => {
+  if (!sharedBrowser) {
+    return;
+  }
+
+  await sharedBrowser.close().catch(() => null);
+
+  sharedBrowser = null;
+};
+
+
+// Registra fechamento limpo do browser ao encerrar a aplicação
+process.once("SIGINT", () => {
+  closeSharedBrowser().finally(() => process.exit(0));
+});
+
+process.once("SIGTERM", () => {
+  closeSharedBrowser().finally(() => process.exit(0));
+});
+
+process.once("beforeExit", () => {
+  return closeSharedBrowser();
+});
+
+
+// ===============================
+// ESTRATÉGIA HÍBRIDA DE FETCH
+// ===============================
+
+// Escolhe melhor estratégia de fetch com fallback robusto
 const fetchHtml = async (url, options = {}) => {
-  // Define se deve preferir Playwright
   const preferPlaywright = Boolean(options.preferPlaywright);
 
-  // Se pediu Playwright direto
-  if (preferPlaywright) {
-    return fetchHtmlWithPlaywright(url);
-  }
+  const strategies = preferPlaywright
+    ? [fetchHtmlWithPlaywright, fetchHtmlWithAxios, fetchHtmlWithPlaywright]
+    : [fetchHtmlWithAxios, fetchHtmlWithPlaywright, fetchHtmlWithAxios];
 
-  try {
-    // Tenta primeiro com axios
-    const html = await fetchHtmlWithAxios(url);
+  let lastError = null;
 
-    // Se veio algo válido, retorna
-    if (html && html.length > 0) {
+  for (const strategy of strategies) {
+    try {
+      const html = await strategy(url);
+
+      assertValidHtml(html, url);
+
       return html;
+    } catch (error) {
+      lastError = error;
+      await sleep(randomBetween(500, 1400));
     }
-
-    // Fallback para Playwright
-    return fetchHtmlWithPlaywright(url);
-
-  } catch (error) {
-    // Se axios falhar, tenta Playwright
-    return fetchHtmlWithPlaywright(url);
   }
+
+  throw lastError || new Error(`Falha total ao buscar HTML da URL: ${url}`);
 };
 
 
-
+// ===============================
+// LISTA DE ANIMES
+// ===============================
 const scrapeHome = async () => {
-  // Define URL base
   const url = BASE_URL;
 
-  // Busca HTML usando Playwright
   const html = await fetchHtml(url, {
     preferPlaywright: true
   });
 
-  // Carrega HTML no Cheerio
-  const $ = cheerio.load(html || "");
+  const $ = cheerio.load(html);
 
-  // Array de animes encontrados
   const animes = [];
-
-  // Evita duplicados
   const seenLinks = new Set();
 
-  // Busca todos os links da página
   $("a[href]").each((index, element) => {
     const href = $(element).attr("href");
-
-    if (!href) return;
-
     const link = toAbsoluteUrl(href);
 
-    if (!looksLikeAnimeLink(link)) return;
+    if (!looksLikeAnimeLink(link)) {
+      return;
+    }
 
-    if (seenLinks.has(link)) return;
+    if (seenLinks.has(link)) {
+      return;
+    }
+
+    const title = normalizeAnimeTitle(
+      cleanText($(element).attr("title")) ||
+      cleanText($(element).find("img").attr("alt")) ||
+      cleanText($(element).text()) ||
+      cleanText($(element).closest("article").text()) ||
+      cleanText($(element).closest("div").text())
+    );
+
+    if (!title || title.length < 2) {
+      return;
+    }
+
+    const cover = getImageFromElement($, element);
 
     seenLinks.add(link);
 
-    const title = cleanText($(element).text());
-
-    if (!title) return;
-
     animes.push({
+      id: animes.length + 1,
       title,
       slug: getAnimeSlugFromUrl(link),
-      link
+      link,
+      cover
     });
   });
 
-  return animes;
+  const uniqueItems = uniqueByLink(animes).map((item, index) => ({
+    ...item,
+    id: index + 1
+  }));
+
+  return uniqueItems;
 };
 
 
@@ -667,60 +922,52 @@ const scrapeHome = async () => {
 // DETALHES DO ANIME
 // ===============================
 const scrapeAnimeDetails = async (slug) => {
-  // Valida slug
   if (!slug) {
     throw new Error("Slug do anime não informado.");
   }
 
-  // Monta possíveis URLs
+  const safeSlug = normalizeAnimeSlug(slug);
+
   const possibleAnimeUrls = [
-    `${BASE_URL}/anime/${slug}`,
-    `${BASE_URL}/animes/${slug}`
+    `${BASE_URL}/anime/${safeSlug}`,
+    `${BASE_URL}/animes/${safeSlug}`
   ];
 
-  // Guarda melhor resultado
   let bestResult = null;
 
-  // Tenta cada URL
   for (const animeUrl of possibleAnimeUrls) {
     try {
-      // Busca HTML mais rápido
       const html = await fetchHtml(animeUrl, {
         preferPlaywright: false
       });
 
-      // Se não veio HTML, continua
       if (!html) {
         continue;
       }
 
-      // Carrega HTML
       const $ = cheerio.load(html);
 
-      // Extrai título
-      const title =
-        normalizeAnimeTitle(
-          cleanText($("h1").first().text()) ||
-          getMetaContent($, 'meta[property="og:title"]') ||
-          getMetaContent($, 'meta[name="twitter:title"]')
-        );
+      const title = normalizeAnimeTitle(
+        cleanText($("h1").first().text()) ||
+        getMetaContent($, 'meta[property="og:title"]') ||
+        getMetaContent($, 'meta[name="twitter:title"]')
+      );
 
-      // Se não tem título, continua
-      if (!title) {
+      if (
+        !title ||
+        /pagina nao encontrada/i.test(title) ||
+        /erro 404/i.test(title)
+      ) {
         continue;
       }
 
-      // Extrai título alternativo bruto
       const rawAlternativeTitle =
         cleanText($("h2").first().text()) ||
         cleanText($("h6").eq(1).text()) ||
         cleanText($("h6").eq(0).text());
 
-      // Limpa título alternativo
-      const alternativeTitle =
-        normalizeAlternativeTitle(rawAlternativeTitle, title);
+      const alternativeTitle = normalizeAlternativeTitle(rawAlternativeTitle, title);
 
-      // Extrai capa
       const cover = toAbsoluteUrl(
         $(".animeCover img").attr("src") ||
         $(".anime-cover img").attr("src") ||
@@ -729,12 +976,10 @@ const scrapeAnimeDetails = async (slug) => {
         getMetaContent($, 'meta[property="og:image"]')
       );
 
-      // Extrai score
       const scoreText =
         cleanText($("h4").first().text()) ||
         cleanText($("[class*='score']").first().text());
 
-      // Extrai sinopse bruta
       const rawSynopsis =
         cleanText($(".sinopse").text()) ||
         cleanText($("[class*='sinopse']").text()) ||
@@ -742,28 +987,22 @@ const scrapeAnimeDetails = async (slug) => {
         cleanText($(".description").text()) ||
         getMetaContent($, 'meta[property="og:description"]');
 
-      // Limpa sinopse
       const synopsis = cleanSynopsisText(rawSynopsis, title);
 
-      // Extrai gêneros
       const rawGenres = [];
+
       $("a[href*='/genero/'], a[href*='/genre/'], a[href*='/genres/']").each((index, element) => {
-        // Lê o gênero bruto
         const genre = cleanText($(element).text());
 
-        // Adiciona à lista bruta
         if (genre) {
           rawGenres.push(genre);
         }
       });
 
-      // Normaliza a lista de gêneros
       const genres = normalizeGenres(rawGenres);
 
-      // Extrai texto do body
       const bodyText = cleanText($("body").text());
 
-      // Extrai metadados
       const seasonMatch =
         bodyText.match(/Temporada:\s*(.*?)(?=Estúdio|Estúdios|Áudio|Episódios|Status|Ano|$)/i);
 
@@ -785,11 +1024,10 @@ const scrapeAnimeDetails = async (slug) => {
       const yearMatch =
         bodyText.match(/Ano:\s*(\d{4})/i);
 
-      // Monta resultado final
       bestResult = {
         title,
         alternativeTitle,
-        slug,
+        slug: safeSlug,
         link: animeUrl,
         cover,
         synopsis,
@@ -804,21 +1042,16 @@ const scrapeAnimeDetails = async (slug) => {
         genres
       };
 
-      // Se conseguiu, para
       break;
-
     } catch (error) {
-      // Continua tentando próxima URL
       continue;
     }
   }
 
-  // Se não encontrou nada, retorna null
   if (!bestResult) {
     return null;
   }
 
-  // Retorna resultado
   return bestResult;
 };
 
@@ -827,121 +1060,105 @@ const scrapeAnimeDetails = async (slug) => {
 // EPISÓDIOS DO ANIME
 // ===============================
 const scrapeAnimeEpisodes = async (slug) => {
-  // Valida slug
   if (!slug) {
     throw new Error("Slug do anime não informado.");
   }
 
-  // Monta possíveis URLs
+  const safeSlug = normalizeAnimeSlug(slug);
+
   const possibleAnimeUrls = [
-    `${BASE_URL}/anime/${slug}`,
-    `${BASE_URL}/animes/${slug}`
+    `${BASE_URL}/anime/${safeSlug}`,
+    `${BASE_URL}/animes/${safeSlug}`
   ];
 
-  // Guarda episódios encontrados
   const rawEpisodes = [];
-
-  // Guarda links já vistos
   const seenLinks = new Set();
 
-  // Tenta cada URL
   for (const animeUrl of possibleAnimeUrls) {
     try {
-      // Busca HTML da página
       const html = await fetchHtml(animeUrl, {
         preferPlaywright: false
       });
 
-      // Se não veio HTML, continua
       if (!html) {
         continue;
       }
 
-      // Carrega HTML
       const $ = cheerio.load(html);
 
-      // Procura links
-      $("a[href]").each((index, element) => {
-        // Obtém href
-        const href = $(element).attr("href");
+      const pageTitle =
+        cleanText($("h1").first().text()) ||
+        getMetaContent($, 'meta[property="og:title"]');
 
-        // Converte em absoluta
+      if (
+        /pagina nao encontrada/i.test(pageTitle) ||
+        /erro 404/i.test(pageTitle)
+      ) {
+        continue;
+      }
+
+      $("a[href]").each((index, element) => {
+        const href = $(element).attr("href");
         const link = toAbsoluteUrl(href);
 
-        // Valida se parece episódio
-        if (!looksLikeEpisodeLink(link, slug)) {
+        if (!looksLikeEpisodeLink(link, safeSlug)) {
           return;
         }
 
-        // Ignora duplicado
         if (seenLinks.has(link)) {
           return;
         }
 
-        // Extrai título bruto
         const rawTitle =
           cleanText($(element).attr("title")) ||
           cleanText($(element).text()) ||
           cleanText($(element).closest("article").text()) ||
           cleanText($(element).closest("div").text());
 
-        // Extrai número
         const episodeNumber =
           getEpisodeNumberFromText(rawTitle) ||
           getEpisodeNumberFromUrl(link);
 
-        // Ignora se não achou número
         if (!episodeNumber) {
           return;
         }
 
-        // Marca link como visto
         seenLinks.add(link);
 
-        // Adiciona episódio
         rawEpisodes.push({
           id: rawEpisodes.length + 1,
           number: episodeNumber,
           title: `Episódio ${episodeNumber}`,
-          slug,
+          slug: safeSlug,
           link
         });
       });
 
-      // Se encontrou episódios, pode parar
       if (rawEpisodes.length > 0) {
         break;
       }
-
     } catch (error) {
-      // Continua tentando próxima URL
       continue;
     }
   }
 
-  // Ordena por número
   rawEpisodes.sort((a, b) => a.number - b.number);
 
-  // Deduplica por número
   const episodeMap = new Map();
 
   rawEpisodes.forEach((episode) => {
-    // Monta chave
     const key = `ep_${episode.number}`;
 
-    // Salva apenas o primeiro de cada número
     if (!episodeMap.has(key)) {
       episodeMap.set(key, episode);
     }
   });
 
-  // Converte para array final
   const episodes = Array.from(episodeMap.values()).map((episode, index) => ({
     ...episode,
     id: index + 1
   }));
 
-  // Retorna episódios
   return episodes;
 };
 
@@ -949,61 +1166,46 @@ const scrapeAnimeEpisodes = async (slug) => {
 // ===============================
 // PLAYER DO EPISÓDIO
 // ===============================
-const scrapeAnimeEpisodePlayer = async (
-  slug,
-  episodeNumber
-) => {
-  // Valida slug
+const scrapeAnimeEpisodePlayer = async (slug, episodeNumber) => {
   if (!slug) {
     throw new Error("Slug do anime não informado.");
   }
 
-  // Valida episódio
   if (!episodeNumber) {
     throw new Error("Número do episódio não informado.");
   }
 
-  // Monta primeiro a URL real
-  const realEpisodeUrl =
-    `${BASE_URL}/episodio/${slug}-episodio-${episodeNumber}/`;
+  const safeSlug = normalizeAnimeSlug(slug);
 
-  // Mantém alguns fallbacks
+  const realEpisodeUrl =
+    `${BASE_URL}/episodio/${safeSlug}-episodio-${episodeNumber}/`;
+
   const possibleEpisodeUrls = [
     realEpisodeUrl,
-    `${BASE_URL}/anime/${slug}/episodio/${episodeNumber}`,
-    `${BASE_URL}/animes/${slug}/episodio/${episodeNumber}`,
-    `${BASE_URL}/anime/${slug}/${episodeNumber}`,
-    `${BASE_URL}/animes/${slug}/${episodeNumber}`
+    `${BASE_URL}/anime/${safeSlug}/episodio/${episodeNumber}`,
+    `${BASE_URL}/animes/${safeSlug}/episodio/${episodeNumber}`,
+    `${BASE_URL}/anime/${safeSlug}/${episodeNumber}`,
+    `${BASE_URL}/animes/${safeSlug}/${episodeNumber}`
   ];
 
-  // Guarda players
   const players = [];
-
-  // Guarda vistos
   const seen = new Set();
 
-  // Função auxiliar para adicionar player
   const pushPlayer = (server, type, url) => {
-    // Ignora vazio
     if (!url) {
       return;
     }
 
-    // Normaliza URL
     const finalUrl = toAbsoluteUrl(url);
 
-    // Ignora duplicado
     if (seen.has(finalUrl)) {
       return;
     }
 
-    // Marca como visto
     seen.add(finalUrl);
 
-    // Detecta nome melhor do servidor
     const detectedServer = detectPlayerServerName(finalUrl, server);
 
-    // Adiciona player
     players.push({
       server: cleanText(detectedServer || "player"),
       type: cleanText(type || "embed"),
@@ -1011,41 +1213,33 @@ const scrapeAnimeEpisodePlayer = async (
     });
   };
 
-  // Tenta cada URL possível
   for (const episodeUrl of possibleEpisodeUrls) {
     try {
-      // Busca HTML do episódio
       const html = await fetchHtml(episodeUrl, {
         preferPlaywright: false
       });
 
-      // Se não veio HTML, tenta próxima
       if (!html) {
         continue;
       }
 
-      // Carrega HTML
       const $ = cheerio.load(html);
 
-      // Busca iframes
       $("iframe").each((index, element) => {
         const src = $(element).attr("src");
         pushPlayer(`iframe_${index + 1}`, "iframe", src);
       });
 
-      // Busca vídeos diretos
       $("video").each((index, element) => {
         const src = $(element).attr("src");
         pushPlayer(`video_${index + 1}`, "video", src);
       });
 
-      // Busca tags source
       $("video source, source").each((index, element) => {
         const src = $(element).attr("src");
         pushPlayer(`source_${index + 1}`, "video", src);
       });
 
-      // Busca links em scripts inline
       const pageHtml = String(html);
 
       const regexMatches = [
@@ -1070,27 +1264,23 @@ const scrapeAnimeEpisodePlayer = async (
         pushPlayer(`script_${index + 1}`, "embed", value);
       });
 
-      // Se encontrou players, retorna
       if (players.length > 0) {
         return {
           title: `Episódio ${episodeNumber}`,
-          slug,
+          slug: safeSlug,
           episodeNumber: Number(episodeNumber),
           episodeUrl,
           players
         };
       }
-
     } catch (error) {
-      // Continua tentando próxima
       continue;
     }
   }
 
-  // Retorno seguro
   return {
     title: `Episódio ${episodeNumber}`,
-    slug,
+    slug: safeSlug,
     episodeNumber: Number(episodeNumber),
     episodeUrl: realEpisodeUrl,
     players: []
