@@ -16,53 +16,90 @@ const animeScraper = require("../utils/anime.scraper");
 const ANIME_CACHE_PREFIX = "anime_module";
 
 
+// ===============================
+// BACKUP EM MEMÓRIA
+// ===============================
+
+// Guarda o último resultado válido em memória
+// Isso protege a API quando a fonte externa bloquear temporariamente
+const memoryBackup = {
+  animes: null,
+  animeDetails: new Map(),
+  animeEpisodes: new Map(),
+  animePlayers: new Map()
+};
+
+
+// ===============================
+// HELPERS DE CACHE
+// ===============================
+
 // Monta a chave de cache da lista de animes
 const getAnimesCacheKey = () => {
-  // Retorna a chave da lista principal
   return `${ANIME_CACHE_PREFIX}_list`;
 };
 
 
 // Monta a chave de cache dos detalhes do anime
 const getAnimeDetailsCacheKey = (slug) => {
-  // Retorna a chave dos detalhes
   return `${ANIME_CACHE_PREFIX}_details_${slug}`;
 };
 
 
 // Monta a chave de cache dos episódios do anime
 const getAnimeEpisodesCacheKey = (slug) => {
-  // Retorna a chave dos episódios
   return `${ANIME_CACHE_PREFIX}_episodes_${slug}`;
 };
 
 
 // Monta a chave de cache do player do episódio
 const getAnimePlayerCacheKey = (slug, episodeNumber) => {
-  // Retorna a chave do player
   return `${ANIME_CACHE_PREFIX}_player_${slug}_${episodeNumber}`;
 };
 
 
 // Valida se o slug foi informado
 const validateSlug = (slug) => {
-  // Se não existir slug, lança erro
   if (!slug || !String(slug).trim()) {
-    throw new NotFoundError(
-      "Slug do anime não informado."
-    );
+    throw new NotFoundError("Slug do anime não informado.");
   }
 };
 
 
 // Valida se o número do episódio foi informado
 const validateEpisodeNumber = (episodeNumber) => {
-  // Se não existir número do episódio, lança erro
   if (!episodeNumber || !String(episodeNumber).trim()) {
-    throw new NotFoundError(
-      "Número do episódio não informado."
-    );
+    throw new NotFoundError("Número do episódio não informado.");
   }
+};
+
+
+// Detecta se o erro atual parece bloqueio da fonte
+const isSourceBlockedError = (error) => {
+  const message = String(error?.message || "").toLowerCase();
+
+  return (
+    message.includes("html inválido") ||
+    message.includes("bloqueado") ||
+    message.includes("incompleto para a url") ||
+    message.includes("cloudflare") ||
+    message.includes("access denied") ||
+    message.includes("request blocked")
+  );
+};
+
+
+// Monta resposta padronizada com metadados internos
+const buildServiceResponse = (data, options = {}) => {
+  return {
+    data,
+    meta: {
+      cached: Boolean(options.cached),
+      fallback: Boolean(options.fallback),
+      sourceBlocked: Boolean(options.sourceBlocked),
+      source: options.source || "live"
+    }
+  };
 };
 
 
@@ -70,32 +107,48 @@ const validateEpisodeNumber = (episodeNumber) => {
 // LISTAR ANIMES
 // ===============================
 const fetchAnimes = async () => {
-  // Monta a chave de cache
   const cacheKey = getAnimesCacheKey();
 
-  // Tenta ler do cache
   const cachedData = getCache(cacheKey);
 
-  // Se encontrou no cache, retorna direto
   if (cachedData) {
-    return cachedData;
+    return buildServiceResponse(cachedData, {
+      cached: true,
+      fallback: false,
+      sourceBlocked: false,
+      source: "cache"
+    });
   }
 
-  // Busca a lista no scraper
-  const animes = await animeScraper.scrapeHome();
+  try {
+    const animes = await animeScraper.scrapeHome();
 
-  // Se não encontrou nada, lança erro
-  if (!animes || !Array.isArray(animes) || animes.length === 0) {
-    throw new NotFoundError(
-      "Nenhum anime encontrado no site."
-    );
+    if (!animes || !Array.isArray(animes) || animes.length === 0) {
+      throw new NotFoundError("Nenhum anime encontrado no site.");
+    }
+
+    setCache(cacheKey, animes);
+
+    memoryBackup.animes = animes;
+
+    return buildServiceResponse(animes, {
+      cached: false,
+      fallback: false,
+      sourceBlocked: false,
+      source: "live"
+    });
+  } catch (error) {
+    if (memoryBackup.animes && Array.isArray(memoryBackup.animes) && memoryBackup.animes.length > 0) {
+      return buildServiceResponse(memoryBackup.animes, {
+        cached: false,
+        fallback: true,
+        sourceBlocked: isSourceBlockedError(error),
+        source: "memory_backup"
+      });
+    }
+
+    throw error;
   }
-
-  // Salva no cache
-  setCache(cacheKey, animes);
-
-  // Retorna a lista
-  return animes;
 };
 
 
@@ -103,35 +156,52 @@ const fetchAnimes = async () => {
 // DETALHES DO ANIME
 // ===============================
 const fetchAnimeDetails = async (slug) => {
-  // Valida o slug
   validateSlug(slug);
 
-  // Monta a chave de cache
   const cacheKey = getAnimeDetailsCacheKey(slug);
 
-  // Tenta ler do cache
   const cachedData = getCache(cacheKey);
 
-  // Se encontrou no cache, retorna direto
   if (cachedData) {
-    return cachedData;
+    return buildServiceResponse(cachedData, {
+      cached: true,
+      fallback: false,
+      sourceBlocked: false,
+      source: "cache"
+    });
   }
 
-  // Busca os detalhes no scraper
-  const details = await animeScraper.scrapeAnimeDetails(slug);
+  try {
+    const details = await animeScraper.scrapeAnimeDetails(slug);
 
-  // Se não encontrou detalhes, lança erro
-  if (!details || typeof details !== "object") {
-    throw new NotFoundError(
-      "Detalhes do anime não encontrados."
-    );
+    if (!details || typeof details !== "object") {
+      throw new NotFoundError("Detalhes do anime não encontrados.");
+    }
+
+    setCache(cacheKey, details);
+
+    memoryBackup.animeDetails.set(slug, details);
+
+    return buildServiceResponse(details, {
+      cached: false,
+      fallback: false,
+      sourceBlocked: false,
+      source: "live"
+    });
+  } catch (error) {
+    const backup = memoryBackup.animeDetails.get(slug);
+
+    if (backup) {
+      return buildServiceResponse(backup, {
+        cached: false,
+        fallback: true,
+        sourceBlocked: isSourceBlockedError(error),
+        source: "memory_backup"
+      });
+    }
+
+    throw error;
   }
-
-  // Salva no cache
-  setCache(cacheKey, details);
-
-  // Retorna os detalhes
-  return details;
 };
 
 
@@ -139,92 +209,114 @@ const fetchAnimeDetails = async (slug) => {
 // EPISÓDIOS DO ANIME
 // ===============================
 const fetchAnimeEpisodes = async (slug) => {
-  // Valida o slug
   validateSlug(slug);
 
-  // Monta a chave de cache
   const cacheKey = getAnimeEpisodesCacheKey(slug);
 
-  // Tenta ler do cache
   const cachedData = getCache(cacheKey);
 
-  // Se encontrou no cache, retorna direto
   if (cachedData) {
-    return cachedData;
+    return buildServiceResponse(cachedData, {
+      cached: true,
+      fallback: false,
+      sourceBlocked: false,
+      source: "cache"
+    });
   }
 
-  // Busca os episódios no scraper
-  const episodes = await animeScraper.scrapeAnimeEpisodes(slug);
+  try {
+    const episodes = await animeScraper.scrapeAnimeEpisodes(slug);
 
-  // Se não encontrou episódios, lança erro
-  if (!episodes || !Array.isArray(episodes) || episodes.length === 0) {
-    throw new NotFoundError(
-      "Nenhum episódio encontrado."
-    );
+    if (!episodes || !Array.isArray(episodes) || episodes.length === 0) {
+      throw new NotFoundError("Nenhum episódio encontrado.");
+    }
+
+    setCache(cacheKey, episodes);
+
+    memoryBackup.animeEpisodes.set(slug, episodes);
+
+    return buildServiceResponse(episodes, {
+      cached: false,
+      fallback: false,
+      sourceBlocked: false,
+      source: "live"
+    });
+  } catch (error) {
+    const backup = memoryBackup.animeEpisodes.get(slug);
+
+    if (backup && Array.isArray(backup) && backup.length > 0) {
+      return buildServiceResponse(backup, {
+        cached: false,
+        fallback: true,
+        sourceBlocked: isSourceBlockedError(error),
+        source: "memory_backup"
+      });
+    }
+
+    throw error;
   }
-
-  // Salva no cache
-  setCache(cacheKey, episodes);
-
-  // Retorna os episódios
-  return episodes;
 };
 
 
 // ===============================
 // PLAYER DO EPISÓDIO
 // ===============================
-const fetchAnimeEpisodePlayer = async (
-  slug,
-  episodeNumber
-) => {
-  // Valida o slug
+const fetchAnimeEpisodePlayer = async (slug, episodeNumber) => {
   validateSlug(slug);
-
-  // Valida o número do episódio
   validateEpisodeNumber(episodeNumber);
 
-  // Monta a chave de cache
-  const cacheKey = getAnimePlayerCacheKey(
-    slug,
-    episodeNumber
-  );
+  const cacheKey = getAnimePlayerCacheKey(slug, episodeNumber);
 
-  // Tenta ler do cache
   const cachedData = getCache(cacheKey);
 
-  // Se encontrou no cache, retorna direto
   if (cachedData) {
-    return cachedData;
+    return buildServiceResponse(cachedData, {
+      cached: true,
+      fallback: false,
+      sourceBlocked: false,
+      source: "cache"
+    });
   }
 
-  // Busca o player no scraper
-  const player = await animeScraper.scrapeAnimeEpisodePlayer(
-    slug,
-    episodeNumber
-  );
+  try {
+    const player = await animeScraper.scrapeAnimeEpisodePlayer(slug, episodeNumber);
 
-  // Se o scraper não retornou estrutura válida, lança erro
-  if (!player || typeof player !== "object") {
-    throw new NotFoundError(
-      "Player do episódio não encontrado."
-    );
+    if (!player || typeof player !== "object") {
+      throw new NotFoundError("Player do episódio não encontrado.");
+    }
+
+    const normalizedPlayer = {
+      title: player.title || `Episódio ${episodeNumber}`,
+      slug: player.slug || slug,
+      episodeNumber: Number(player.episodeNumber || episodeNumber),
+      episodeUrl: player.episodeUrl || "",
+      players: Array.isArray(player.players) ? player.players : []
+    };
+
+    setCache(cacheKey, normalizedPlayer);
+
+    memoryBackup.animePlayers.set(`${slug}_${episodeNumber}`, normalizedPlayer);
+
+    return buildServiceResponse(normalizedPlayer, {
+      cached: false,
+      fallback: false,
+      sourceBlocked: false,
+      source: "live"
+    });
+  } catch (error) {
+    const backup = memoryBackup.animePlayers.get(`${slug}_${episodeNumber}`);
+
+    if (backup) {
+      return buildServiceResponse(backup, {
+        cached: false,
+        fallback: true,
+        sourceBlocked: isSourceBlockedError(error),
+        source: "memory_backup"
+      });
+    }
+
+    throw error;
   }
-
-  // Garante estrutura mínima segura
-  const normalizedPlayer = {
-    title: player.title || `Episódio ${episodeNumber}`,
-    slug: player.slug || slug,
-    episodeNumber: Number(player.episodeNumber || episodeNumber),
-    episodeUrl: player.episodeUrl || "",
-    players: Array.isArray(player.players) ? player.players : []
-  };
-
-  // Salva no cache
-  setCache(cacheKey, normalizedPlayer);
-
-  // Retorna o player normalizado
-  return normalizedPlayer;
 };
 
 
