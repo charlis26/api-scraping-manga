@@ -1,13 +1,20 @@
 {
-  "name": "manga-site",
+  "name": "api-scraping-animes-e-mangas",
   "version": "1.0.0",
-  "description": "API de leitura de mangas com scraping",
+  "description": "API de scraping para animes e mangás com cache, timeout, health check e logs.",
   "main": "server.js",
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js"
   },
-  "keywords": [],
+  "keywords": [
+    "api",
+    "scraping",
+    "anime",
+    "manga",
+    "express",
+    "playwright"
+  ],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
@@ -19,7 +26,8 @@
     "dotenv": "^17.3.1",
     "express": "^4.21.2",
     "express-rate-limit": "^8.3.1",
-    "helmet": "^8.1.0"
+    "helmet": "^8.1.0",
+    "playwright": "^1.58.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

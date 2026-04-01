@@ -2,10 +2,28 @@
 const scraper = require("../utils/scraper");
 
 // Importa o cache com TTL
-const { getCache, setCache } = require("../cache/manga.cache");
+const { getCache, setCache } = require("../cache/cache");
 
 // Importa o erro customizado
 const { NotFoundError } = require("../utils/errors");
+
+// Importa a configuração central da fonte
+const SOURCE_CONFIG = require("../config/source.config");
+
+// Guarda a URL base atual da fonte
+const BASE_URL = SOURCE_CONFIG.BASE_URL;
+
+// Guarda o caminho base dos capítulos
+const CHAPTER_PATH = SOURCE_CONFIG.CHAPTER_PATH;
+
+
+// Função auxiliar para criar um identificador seguro da fonte atual
+const getSourceCachePrefix = () => {
+  // Remove protocolo e caracteres problemáticos para usar na chave do cache
+  return BASE_URL
+    .replace(/^https?:\/\//, "")
+    .replace(/[^\w]/g, "_");
+};
 
 
 // ===============================
@@ -13,8 +31,11 @@ const { NotFoundError } = require("../utils/errors");
 // ===============================
 const fetchMangas = async () => {
 
-  // Define chave do cache
-  const cacheKey = "mangas";
+  // Cria prefixo exclusivo da fonte atual
+  const sourcePrefix = getSourceCachePrefix();
+
+  // Define chave do cache separada por domínio
+  const cacheKey = `mangas_${sourcePrefix}`;
 
   // Tenta buscar no cache
   let mangas = getCache(cacheKey);
@@ -23,23 +44,29 @@ const fetchMangas = async () => {
   if (!mangas) {
 
     // Loga scraping
-    console.log("SCRAPING: mangas");
+    console.log(`SCRAPING: mangas | fonte=${BASE_URL}`);
 
     // Busca dados
     mangas = await scraper.scrapeHome();
 
-    // Salva no cache
-    setCache(cacheKey, mangas);
+    // Só salva no cache se vier lista válida e com conteúdo
+    if (Array.isArray(mangas) && mangas.length > 0) {
+      setCache(cacheKey, mangas);
+    } else {
+      console.log(
+        `AVISO: lista de mangás vazia não será salva no cache | fonte=${BASE_URL}`
+      );
+    }
 
   } else {
 
     // Loga cache hit
-    console.log("CACHE HIT: mangas");
+    console.log(`CACHE HIT: mangas | fonte=${BASE_URL}`);
 
   }
 
-  // Retorna lista
-  return mangas;
+  // Garante retorno seguro
+  return Array.isArray(mangas) ? mangas : [];
 
 };
 
@@ -51,13 +78,14 @@ const fetchMangaDetails = async (slug) => {
 
   // Valida slug
   if (!slug) {
-    throw new NotFoundError(
-      "Slug do mangá não informado."
-    );
+    throw new NotFoundError("Slug do mangá não informado.");
   }
 
-  // Define chave do cache
-  const cacheKey = `manga_details_${slug}`;
+  // Cria prefixo exclusivo da fonte atual
+  const sourcePrefix = getSourceCachePrefix();
+
+  // Define chave do cache separada por domínio
+  const cacheKey = `manga_details_${sourcePrefix}_${slug}`;
 
   // Tenta buscar no cache
   let manga = getCache(cacheKey);
@@ -66,34 +94,32 @@ const fetchMangaDetails = async (slug) => {
   if (!manga) {
 
     // Loga scraping
-    console.log(`SCRAPING: detalhes ${slug}`);
+    console.log(`SCRAPING: detalhes ${slug} | fonte=${BASE_URL}`);
 
     // Busca detalhes
     manga = await scraper.scrapeMangaDetails(slug);
 
     // Se não encontrou
     if (!manga) {
-      throw new NotFoundError(
-        "Mangá não encontrado."
-      );
+      throw new NotFoundError("Mangá não encontrado.");
     }
+
+    // Salva no cache
+    setCache(cacheKey, manga);
 
   } else {
 
     // Loga cache hit
-    console.log(`CACHE HIT: detalhes ${slug}`);
+    console.log(`CACHE HIT: detalhes ${slug} | fonte=${BASE_URL}`);
 
   }
 
-  // Garante que latestChapters exista mesmo em cache antigo
+  // Garante latestChapters mesmo em cache antigo
   if (
     !manga.latestChapters &&
     Array.isArray(manga.chapters)
   ) {
-
-    // Cria os 2 últimos capítulos
     manga.latestChapters = manga.chapters.slice(-2).reverse();
-
   }
 
   // Atualiza o cache já no formato novo
@@ -125,13 +151,14 @@ const fetchPagesBySlug = async (slug) => {
 
   // Valida slug
   if (!slug) {
-    throw new NotFoundError(
-      "Slug do capítulo não informado."
-    );
+    throw new NotFoundError("Slug do capítulo não informado.");
   }
 
-  // Define chave do cache
-  const cacheKey = `pages_slug_${slug}`;
+  // Cria prefixo exclusivo da fonte atual
+  const sourcePrefix = getSourceCachePrefix();
+
+  // Define chave do cache separada por domínio
+  const cacheKey = `pages_slug_${sourcePrefix}_${slug}`;
 
   // Tenta buscar no cache
   let pages = getCache(cacheKey);
@@ -140,26 +167,32 @@ const fetchPagesBySlug = async (slug) => {
   if (!pages) {
 
     // Loga scraping
-    console.log(`SCRAPING: ${slug}`);
+    console.log(`SCRAPING: ${slug} | fonte=${BASE_URL}`);
 
-    // Monta URL do capítulo
-    const chapterUrl = `https://mangalivre.blog/capitulo/${slug}/`;
+    // Monta URL do capítulo usando a configuração central
+    const chapterUrl = `${BASE_URL}${CHAPTER_PATH}/${slug}/`;
 
     // Busca páginas
     pages = await scraper.scrapePages(chapterUrl);
 
-    // Salva no cache
-    setCache(cacheKey, pages);
+    // Só salva no cache se vier uma lista com conteúdo
+    if (Array.isArray(pages) && pages.length > 0) {
+      setCache(cacheKey, pages);
+    } else {
+      console.log(
+        `AVISO: páginas vazias não serão salvas no cache | slug=${slug} | fonte=${BASE_URL}`
+      );
+    }
 
   } else {
 
     // Loga cache hit
-    console.log(`CACHE HIT: ${slug}`);
+    console.log(`CACHE HIT: ${slug} | fonte=${BASE_URL}`);
 
   }
 
-  // Retorna páginas
-  return pages;
+  // Garante retorno seguro
+  return Array.isArray(pages) ? pages : [];
 
 };
 

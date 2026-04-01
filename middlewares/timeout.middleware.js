@@ -1,60 +1,52 @@
-
-// REQUEST TIMEOUT MIDDLEWARE
-
-// Tempo máximo de resposta em milissegundos
-// Primeiro tenta ler do .env
-// Se não existir usa 15 segundos
-const TIMEOUT =
-  (process.env.REQUEST_TIMEOUT || 15)
-  * 1000;
+// Importa nada porque este middleware usa apenas recursos nativos do Node/Express
 
 
-// Middleware de timeout
+// Middleware de timeout global da aplicação
 const timeoutMiddleware = (req, res, next) => {
+  // Lê o tempo limite vindo do .env em segundos
+  const timeoutInSeconds =
+    Number(process.env.REQUEST_TIMEOUT) || 15;
 
-  // Marca se já respondeu
-  let finished = false;
+  // Converte o tempo para milissegundos
+  const timeoutInMilliseconds =
+    timeoutInSeconds * 1000;
 
-  // Inicia o timer
-  const timer = setTimeout(() => {
+  // Marca inicialmente que a requisição ainda não expirou
+  req.timedout = false;
 
-    // Se ainda não respondeu
-    if (!finished) {
+  // Cria o timer que vai encerrar a requisição se passar do limite
+  const timeoutId = setTimeout(() => {
+    // Marca a requisição como expirada
+    req.timedout = true;
 
-      // Marca como finalizado
-      finished = true;
-
-      // Retorna erro de timeout
-      res.status(408).json({
-
-        success: false,
-
-        error: "Tempo limite excedido"
-
-      });
-
+    // Se a resposta já tiver sido enviada, não faz nada
+    if (res.headersSent) {
+      return;
     }
 
-  }, TIMEOUT);
+    // Retorna erro padronizado de timeout
+    res.status(408).json({
+      success: false,
+      error: "Tempo limite excedido"
+    });
+  }, timeoutInMilliseconds);
 
+  // Função auxiliar para limpar o timer com segurança
+  const clearRequestTimeout = () => {
+    // Limpa o timer para evitar vazamento de memória
+    clearTimeout(timeoutId);
+  };
 
-  // Quando a resposta terminar
-  res.on("finish", () => {
+  // Quando a resposta terminar normalmente, limpa o timer
+  res.on("finish", clearRequestTimeout);
 
-    // Marca como finalizado
-    finished = true;
+  // Quando a conexão for fechada antes do fim, limpa o timer
+  res.on("close", clearRequestTimeout);
 
-    // Cancela o timer
-    clearTimeout(timer);
-
-  });
-
-
-  // Continua fluxo
+  // Passa para o próximo middleware/controller
   next();
-
 };
 
 
-// Exporta middleware
+// Exporta o middleware para uso no server.js
 module.exports = timeoutMiddleware;

@@ -2,7 +2,7 @@
 const mangaService = require("../services/manga.service");
 
 // Importa a função que retorna todas as chaves do cache
-const { getAllCacheKeys } = require("../cache/manga.cache");
+const { getAllCacheKeys } = require("../cache/cache");
 
 
 // Lista todos os mangás disponíveis
