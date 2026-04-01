@@ -610,9 +610,7 @@ const fetchHtml = async (url, options = {}) => {
 };
 
 
-// ===============================
-// LISTA DE ANIMES
-// ===============================
+
 const scrapeHome = async () => {
   // Define URL inicial
   const url = BASE_URL;
@@ -621,7 +619,33 @@ const scrapeHome = async () => {
   const html = await fetchHtml(url, {
     preferPlaywright: true
   });
+const scrapeHome = async () => {
+  const url = BASE_URL;
 
+  const html = await fetchHtml(url, {
+    preferPlaywright: true
+  });
+
+  console.log("\n[DEBUG HOME] URL:", url);
+  console.log("[DEBUG HOME] HTML length:", html ? html.length : 0);
+
+  const debug$ = cheerio.load(html || "");
+  console.log("[DEBUG HOME] title:", cleanText(debug$("title").text()));
+  console.log("[DEBUG HOME] h1:", cleanText(debug$("h1").first().text()));
+  console.log("[DEBUG HOME] anime links:", debug$("a[href*='/anime/'], a[href*='/animes/']").length);
+
+  console.log(
+    "[DEBUG HOME] first 1000 chars:",
+    String(html || "").slice(0, 1000)
+  );
+
+  const $ = cheerio.load(html);
+
+  const animes = [];
+  const seenLinks = new Set();
+
+  // resto da função continua normalmente...
+};
   // Carrega no cheerio
   const $ = cheerio.load(html);
 
