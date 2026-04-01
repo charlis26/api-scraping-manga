@@ -516,22 +516,24 @@ const fetchHtmlWithAxios = async (url) => {
 
 // Faz requisição renderizada com Playwright
 const fetchHtmlWithPlaywright = async (url) => {
-  // Guarda browser para fechamento seguro
   let browser = null;
 
   try {
-    // Abre navegador
     browser = await chromium.launch({
-      headless: true
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-blink-features=AutomationControlled"
+      ]
     });
 
-    // Cria contexto
     const context = await browser.newContext({
       userAgent:
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       viewport: {
         width: 1366,
-        height: 900
+        height: 768
       },
       locale: "pt-BR",
       extraHTTPHeaders: {
@@ -542,40 +544,43 @@ const fetchHtmlWithPlaywright = async (url) => {
       }
     });
 
-    // Cria aba
     const page = await context.newPage();
 
-    // Abre página
-    await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 12000
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => false
+      });
+
+      Object.defineProperty(navigator, "languages", {
+        get: () => ["pt-BR", "pt", "en-US", "en"]
+      });
+
+      Object.defineProperty(navigator, "plugins", {
+        get: () => [1, 2, 3, 4, 5]
+      });
     });
 
-    // Aguarda um pouco para renderização
-    await page.waitForTimeout(1800);
+    await page.goto(url, {
+      waitUntil: "networkidle",
+      timeout: 60000
+    });
 
-    // Captura HTML final
+    await page.waitForTimeout(3000);
+
     const html = await page.content();
 
-    // Fecha contexto
     await context.close();
-
-    // Fecha navegador
     await browser.close();
 
-    // Limpa referência
     browser = null;
 
-    // Retorna HTML
     return html;
 
   } catch (error) {
-    // Fecha browser se estiver aberto
     if (browser) {
       await browser.close();
     }
 
-    // Repassa erro
     throw error;
   }
 };
@@ -612,100 +617,49 @@ const fetchHtml = async (url, options = {}) => {
 
 
 const scrapeHome = async () => {
-  // Define URL inicial
+  // Define URL base
   const url = BASE_URL;
 
-  // Busca HTML renderizado
+  // Busca HTML usando Playwright
   const html = await fetchHtml(url, {
     preferPlaywright: true
   });
 
-  // Logs de debug para o Render
-  console.log("\n[DEBUG HOME] URL:", url);
-  console.log("[DEBUG HOME] HTML length:", html ? html.length : 0);
-
-  const debug$ = cheerio.load(html || "");
-
-  console.log("[DEBUG HOME] title:", cleanText(debug$("title").text()));
-  console.log("[DEBUG HOME] h1:", cleanText(debug$("h1").first().text()));
-  console.log(
-    "[DEBUG HOME] anime links:",
-    debug$("a[href*='/anime/'], a[href*='/animes/']").length
-  );
-
-  console.log(
-    "[DEBUG HOME] first 1000 chars:",
-    String(html || "").slice(0, 1000)
-  );
-
-  // Carrega no cheerio
+  // Carrega HTML no Cheerio
   const $ = cheerio.load(html || "");
 
-  // Guarda resultados
+  // Array de animes encontrados
   const animes = [];
 
-  // Guarda links vistos
+  // Evita duplicados
   const seenLinks = new Set();
 
   // Busca todos os links da página
   $("a[href]").each((index, element) => {
-    // Obtém href bruto
     const href = $(element).attr("href");
 
-    // Converte em absoluta
+    if (!href) return;
+
     const link = toAbsoluteUrl(href);
 
-    // Valida se parece anime
-    if (!looksLikeAnimeLink(link)) {
-      return;
-    }
+    if (!looksLikeAnimeLink(link)) return;
 
-    // Ignora duplicado
-    if (seenLinks.has(link)) {
-      return;
-    }
+    if (seenLinks.has(link)) return;
 
-    // Tenta obter título
-    const title = normalizeAnimeTitle(
-      cleanText($(element).attr("title")) ||
-      cleanText($(element).find("img").attr("alt")) ||
-      cleanText($(element).text()) ||
-      cleanText($(element).closest("article").text()) ||
-      cleanText($(element).closest("div").text())
-    );
-
-    // Ignora título ruim
-    if (!title || title.length < 2) {
-      return;
-    }
-
-    // Obtém capa
-    const cover = getImageFromElement($, element);
-
-    // Marca como visto
     seenLinks.add(link);
 
-    // Adiciona item
+    const title = cleanText($(element).text());
+
+    if (!title) return;
+
     animes.push({
-      id: animes.length + 1,
       title,
       slug: getAnimeSlugFromUrl(link),
-      link,
-      cover
+      link
     });
   });
 
-  // Deduplica e reindexa
-  const uniqueItems = uniqueByLink(animes).map((item, index) => ({
-    ...item,
-    id: index + 1
-  }));
-
-  // Debug final
-  console.log("[DEBUG HOME] extracted animes:", uniqueItems.length);
-
-  // Retorna lista final
-  return uniqueItems;
+  return animes;
 };
 
 
