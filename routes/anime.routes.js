@@ -6,71 +6,91 @@ const router = express.Router();
 
 // Importa os controllers do módulo de anime
 const {
+  getAnimeHomeSections,
   getAnimes,
+  searchAnimes,
+  getAnimeGenres,
   getAnimeDetails,
   getAnimeEpisodes,
   getAnimeEpisodePlayer,
+  streamAnimeEpisode,
   getAnimeHealth
 } = require("../controllers/anime.controller");
 
 // Importa o asyncHandler para tratar erros assíncronos sem quebrar a aplicação
 const asyncHandler = require("../utils/asyncHandler");
 
-
 // =========================
 // HEALTH CHECK DO MÓDULO
 // =========================
-
-// Rota para verificar se o módulo de anime está respondendo
 router.get(
   "/health",
   asyncHandler(getAnimeHealth)
 );
 
+// =========================
+// HOME ESTRUTURADA
+// =========================
+router.get(
+  "/home",
+  asyncHandler(getAnimeHomeSections)
+);
+
+// =========================
+// BUSCA POR NOME
+// =========================
+router.get(
+  "/search",
+  asyncHandler(searchAnimes)
+);
+
+// =========================
+// LISTA DE GÊNEROS
+// =========================
+router.get(
+  "/genres",
+  asyncHandler(getAnimeGenres)
+);
 
 // =========================
 // LISTA DE ANIMES
 // =========================
-
-// Rota para listar os animes disponíveis
 router.get(
   "/",
   asyncHandler(getAnimes)
 );
 
-
 // =========================
 // DETALHES DO ANIME
 // =========================
-
-// Rota para retornar os detalhes de um anime pelo slug
 router.get(
   "/:slug",
   asyncHandler(getAnimeDetails)
 );
 
-
 // =========================
 // EPISÓDIOS DO ANIME
 // =========================
-
-// Rota para listar os episódios de um anime pelo slug
 router.get(
   "/:slug/episodes",
   asyncHandler(getAnimeEpisodes)
 );
 
-
 // =========================
 // PLAYER / FONTES DO EPISÓDIO
 // =========================
-
-// Rota para retornar os players ou provedores de um episódio específico
 router.get(
   "/:slug/episode/:episodeNumber",
   asyncHandler(getAnimeEpisodePlayer)
 );
 
+// =========================
+// STREAM INTERNO DO EPISÓDIO
+// =========================
+router.get(
+  "/:slug/episode/:episodeNumber/stream",
+  asyncHandler(streamAnimeEpisode)
+);
 
 // Exporta o router para ser usado no server.js
 module.exports = router;

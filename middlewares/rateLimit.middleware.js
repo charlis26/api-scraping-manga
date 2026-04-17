@@ -1,43 +1,39 @@
 // Importa o pacote responsável por limitar requisições
 const rateLimit = require("express-rate-limit");
 
-
 // Cria o middleware de rate limit
 const limiter = rateLimit({
 
-  // Define a janela de tempo do rate limit
-  // Primeiro tenta ler do .env
-  // Se não existir, usa 15 minutos como padrão
+  // Janela de tempo
   windowMs:
-    (process.env.RATE_LIMIT_WINDOW || 15)
+    Number(process.env.RATE_LIMIT_WINDOW || 15)
     * 60
     * 1000,
 
-  // Define o número máximo de requisições permitidas por IP
-  // Primeiro tenta ler do .env
-  // Se não existir, usa 100 requisições como padrão
+  // Máximo por IP
   max:
-    process.env.RATE_LIMIT_MAX || 100,
+    Number(process.env.RATE_LIMIT_MAX || 300),
 
-  // Define a resposta padrão quando o limite for ultrapassado
+  // Mensagem quando exceder
   message: {
-
-    // Indica que a requisição falhou
     success: false,
-
-    // Mensagem retornada ao cliente
-    error: "Muitas requisições. Tente novamente mais tarde."
-
+    error:
+      "Muitas requisições. Tente novamente em alguns minutos."
   },
 
-  // Envia os headers modernos de rate limit
+  // Headers modernos
   standardHeaders: true,
 
-  // Desativa headers antigos
-  legacyHeaders: false
+  // Remove headers antigos
+  legacyHeaders: false,
+
+  // Não conta requisições falhadas
+  skipFailedRequests: true,
+
+  // Não conta requisições com erro
+  skipSuccessfulRequests: false
 
 });
 
-
-// Exporta o middleware para uso no servidor
+// Exporta middleware
 module.exports = limiter;

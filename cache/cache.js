@@ -81,13 +81,21 @@ const getCache = (key) => {
 
 
 // Salva um item no cache
-const setCache = (key, value) => {
+// Salva um item no cache
+const setCache = (key, value, customTtlMs = null) => {
+
+  // Decide qual TTL será usado
+  const resolvedTtlMs =
+    Number.isFinite(customTtlMs) &&
+    customTtlMs > 0
+      ? customTtlMs
+      : CACHE_TTL_MS;
 
   // Salva valor com tempo de expiração
   cacheStore.set(key, {
     value,
     createdAt: Date.now(),
-    expiresAt: Date.now() + CACHE_TTL_MS
+    expiresAt: Date.now() + resolvedTtlMs
   });
 
   return value;

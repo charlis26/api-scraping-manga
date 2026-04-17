@@ -1,5 +1,5 @@
 // Importa o scraper responsável por buscar os dados
-const scraper = require("../utils/scraper");
+const scraper = require("../utils/manga.scraper");
 
 // Importa o cache com TTL
 const { getCache, setCache } = require("../cache/cache");
